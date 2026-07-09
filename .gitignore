@@ -1,0 +1,22 @@
+# Local environment overrides — NEVER commit real DB credentials.
+.env
+.env.local
+*.local
+
+# Legacy data dumps / staging artifacts (can be large and/or sensitive).
+*.dump
+*.backup
+*.sql.gz
+*.tar
+*.gz
+
+# Logs / scratch
+*.log
+*.tmp
+/scratch/
+
+# OS / IDE
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
