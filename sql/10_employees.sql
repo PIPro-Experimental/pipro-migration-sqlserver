@@ -48,7 +48,9 @@ SELECT
     upper(nullif(e."PassportCountry_F46", ''))::char(2) AS nationality_country_code, -- CHOOSE: which field + ISO-2
     -- Basic monthly rate lives on the legacy AMOUNT line, not the masterfile.
     (COALESCE(a.amount, 0) * 100)::bigint              AS rate_minor,         -- CONFIRM: ×100 if major units
-    upper(coalesce(nullif(e."TaxCountryCode_F14",''),'ZA'))::char(3)         AS currency -- CHOOSE: real currency source
+    upper(coalesce(nullif(e."TaxCountryCode_F14",''),'ZA'))::char(3)         AS currency, -- CHOOSE: real currency source
+    e."Occupation_F11"                                 AS occupation,       -- CONFIRM: interim occupation_f11
+    e."Category_F13"                                   AS category          -- CONFIRM: interim category_f13
 FROM :"legacy_schema".employees e
 LEFT JOIN :"legacy_schema".employee_amounts a         -- CHOOSE: real rate table/columns
        ON a."EmployeeNo" = e."EmployeeNo" AND a."Code" = 'BASIC';            -- CHOOSE: the BASIC code
@@ -87,12 +89,13 @@ END $$;
 INSERT INTO employees (
     id, user_id, employee_code, first_name, last_name, email, id_number,
     hired_at, terminated_at, salary_current_minor, currency, created_at,
-    date_of_birth, gender, title, nationality_country_code, marital_status, preferred_name)
+    date_of_birth, gender, title, nationality_country_code, marital_status, preferred_name,
+    occupation, category)
 SELECT
     'emp-' || s.legacy_empno, m.user_id, s.employee_code, s.first_name, s.last_name,
     s.email, s.id_number, s.hired_at, s.terminated_at, s.rate_minor, s.currency,
     :'cutover', s.date_of_birth, s.gender, s.title, s.nationality_country_code,
-    s.marital_status, NULL
+    s.marital_status, NULL, s.occupation, s.category
 FROM _src s JOIN _idmap m ON m.legacy_empno = s.legacy_empno
 ON CONFLICT (employee_code) DO NOTHING;
 
