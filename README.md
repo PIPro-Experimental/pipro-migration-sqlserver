@@ -38,20 +38,63 @@ SQL Server ──(hop 1: PostgresImport, unchanged)──▶ desktop Postgres (i
 `employee_amounts` is routed by its `codetype` (from `settings_employee_amounts` /
 legacy `pw_parm_codes`) — **nothing is silently dropped**:
 
-| codetype | destination |
+| codetype | routed to |
 |---|---|
 | `E` earning | `employee_recurring_earnings` |
 | `D` deduction | `employee_recurring_deductions` |
-| `Y` YTD total | `migration.ytd_takeon` (always mid-year — staged, never dropped) |
-| anything else (`J H B C I S`, unknown, code-not-found) | `migration.amount_quarantine` |
-| amount whose employee didn't load (orphan) | `migration.amount_quarantine` (`employee_not_loaded`) |
+| `C` cost-to-company | `employee_employer_cost` |
+| `Y` YTD total | `migration.ytd_takeon` (mid-year staging) |
+| other recognised (`T H S J B …`) | `employee_deprecated_amounts` — **LIVE, `Q`-addressed, phase-out** |
+| codetype not found (no catalogue row) | `migration.amount_quarantine` |
+| orphan (employee didn't load) | `migration.amount_quarantine` |
 
-The `migration.*` report tables are **persistent** — after a run, query them to see
-exactly what each mystery codetype carries (the forcing function for deciding whether
-the earnings/deductions split holds). **Follow-up:** materialise `migration.ytd_takeon`
-into `cumulative_ledger`/`payslip_fact` — blocked on a legacy-Y-code → pipro
-aggregate-code map (`TAXABLE`/`PAYE`/`RF_DEDUCTIBLE`) + a per-period vs opening-balance
-decision (only matters for `tax_method='cumulative'` payrolls).
+The catalogue (`settings_employee_amounts`, **all** codes incl. `J`) is imported to the
+pipro `settings_employee_amounts` table. Cost / deprecated / catalogue values **keep their
+`OrdinalNo` and stay `Q`-addressed**, so calc/payslip/report references never change (the
+physical split is invisible above the loader).
+
+### Codetype legend (VB6 + live-DB grounded, 2026-07-16)
+
+Codetypes are **data-driven** (read straight from `settings_employee_amounts.codetype`);
+the code only special-cases specific letters. The quarantine report is the authoritative
+inventory per client. Confirmed meanings + eventual homes:
+
+| codetype | meaning | eventual pipro home |
+|---|---|---|
+| `E` | earning | `employee_recurring_earnings` ✅ done |
+| `D` | deduction | `employee_recurring_deductions` ✅ done |
+| `Y` | YTD total (cleared at year-end) | `cumulative_ledger`/`payslip_fact` (mid-year take-on) — staged |
+| `C` | cost-to-company (employer cost) | `employee_employer_cost` ✅ |
+| `T` | time worked (decimal; std/1.5×/2×) | `employee_deprecated_amounts` (phase-out) |
+| `H` | hours (as `T`, HH:MM; minutes<60) | `employee_deprecated_amounts` (phase-out) |
+| `J` | a `DDMMYY` date stuffed into an amount — dormant, calc-unsafe | `employee_deprecated_amounts` — **unsupported**; a calc that hits one treats it as an amount or logs+skips |
+| `S` | scratch/working value | `employee_deprecated_amounts` (phase-out) |
+| `B` | **balances — heterogeneous "junk drawer"** (see below) | classify **per code**, not per codetype |
+| `I` | — | not present in the live DB checked; treat as non-existent |
+
+**`B` is not one category** — the codetype only says "balance"; it must be classified
+**per code**. Subtypes + fates (rate model simplified per owner decision 2026-07-16:
+a single Basic rate, `monthly|daily|hourly`; overtime *derives*, e.g. double-time = 2×Basic
+— independent OT/variant/per-employee rates are NOT carried):
+
+| `B` subtype | e.g. | fate |
+|---|---|---|
+| age (derived each run) | AGE | **drop** — pipro recomputes from `date_of_birth`; birthday message = template on DOB |
+| leave | sick / annual / study | `leave_balances` / `leave_ledger` |
+| basic rate | monthly/daily/hourly | `employee_contracts.rate_minor` (single Basic) |
+| OT / variant rates | 1.5× / 2× / per-emp hourly | **drop** — OT derives from Basic |
+| financial carry-forward | b/f & c/f gross/rate, std tax income | `cumulative_ledger` (take-on) |
+
+All `B` currently quarantines (nothing lost); classifying each `B` code to a fate above is
+the follow-up (57 `B` codes seen in one live DB).
+
+The `migration.*` report tables are **persistent** — after a run, query them to see exactly
+what each codetype carries per client (the forcing function). **Follow-ups:** (1) materialise
+`migration.ytd_takeon` into `cumulative_ledger`/`payslip_fact` — needs a legacy-Y-code → pipro
+aggregate-code map + a per-period vs opening-balance decision (only matters for
+`tax_method='cumulative'` payrolls); (2) build the per-code `B` classification map (age→drop, leave→`leave_balances`, basic rate→
+`employee_contracts`, OT→drop/derive, carry-forward→`cumulative_ledger`);
+(3) decide a home for `C` (cost-to-company).
 
 ## Validation status (2026-07-09)
 

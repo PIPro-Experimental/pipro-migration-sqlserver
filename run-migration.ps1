@@ -41,7 +41,7 @@ $rows = $raw -split "`n" | Where-Object { $_ -match '\|' }
 if (-not $rows) { Write-Host "==> migration_map is empty — edit sql/00_migration_map.sql." -ForegroundColor Yellow; exit 1 }
 
 # --- Populate each tenant (10 core → 20 recurring) ------------------------------
-$scripts = @('sql/10_employees.sql', 'sql/20_recurring.sql') | ForEach-Object { Join-Path $here $_ }
+$scripts = @('sql/10_employees.sql', 'sql/20_recurring.sql', 'sql/40_employee_slots.sql') | ForEach-Object { Join-Path $here $_ }
 foreach ($row in $rows) {
     $c = $row.Split('|')
     $legacy = $c[0]; $slug = $c[1]; $payrollId = $c[2]

@@ -1,31 +1,35 @@
 -- ===========================================================================
--- 20_recurring.sql — route ALL of legacy employee_amounts by CODETYPE.
--- Run AFTER 10_employees.sql, ONCE PER TENANT. Nothing is silently dropped.
+-- 20_recurring.sql — import the amount-code CATALOGUE and route every
+-- legacy employee_amounts value by CODETYPE. Run AFTER 10_employees.sql,
+-- ONCE PER TENANT. Nothing is silently dropped.
 --
+--   settings_employee_amounts (catalogue, ALL codes incl. J) → settings_employee_amounts
 --   codetype E → employee_recurring_earnings
 --   codetype D → employee_recurring_deductions
---   codetype Y → migration.ytd_takeon        (mid-year YTD take-on staging)
---   anything else (J,H,B,C,I,S, unknown, or codetype not found) → migration.amount_quarantine
---   amount whose employee never loaded (orphan)                 → migration.amount_quarantine
+--   codetype C → employee_employer_cost            (cost-to-company; Q-addressed)
+--   codetype Y → migration.ytd_takeon              (mid-year YTD take-on staging)
+--   any OTHER recognised codetype (T,H,S,J,B,…)    → employee_deprecated_amounts
+--                                                    (LIVE, Q-addressed, phase-out;
+--                                                     J = unsupported, calc treats
+--                                                     as an amount or logs+skips)
+--   codetype not found (no catalogue row)          → migration.amount_quarantine
+--   employee never loaded (orphan)                 → migration.amount_quarantine
 --
--- codetype comes from the interim settings_employee_amounts table (or legacy
--- pw_parm_codes). Amounts are always treated as MID-YEAR, so Y is taken on, never
--- dropped.
+-- Values keep their OrdinalNo and stay Q-addressed — no reference rewrite (the
+-- physical split is invisible above the loader). employee_amounts is keyed by
+-- (EmployeeNo, OrdinalNo); the code name + codetype come from the catalogue,
+-- joined on OrdinalNo.
 --
 -- Runner variables: :legacy_schema :tenant_schema :cutover :system_user_id
 --
--- FOLLOW-UP (not done here): materialise migration.ytd_takeon into
--- cumulative_ledger / payslip_fact. That needs (1) a legacy-Y-code → pipro
--- aggregate-code map (TAXABLE / PAYE / RF_DEDUCTIBLE) and (2) a per-period vs
--- single-opening-balance decision — the latter only affects tax_method='cumulative'
--- payrolls, whose engine divisor counts prior periods (see PayslipFactWriter/YtdFactReader).
+-- FOLLOW-UP: materialise migration.ytd_takeon → cumulative_ledger/payslip_fact
+-- (needs the legacy-Y-code → aggregate-code map + per-period vs opening-balance
+-- decision); and the per-code B classification (leave→leave_balances, etc.).
 -- ===========================================================================
 \set ON_ERROR_STOP on
 BEGIN;
 SET search_path TO :"tenant_schema", public;
 
--- Persistent report/staging tables — shared across tenants; inspect AFTER the run
--- to answer "what are B/C/I/S, and how much rides on each?".
 CREATE SCHEMA IF NOT EXISTS migration;
 CREATE TABLE IF NOT EXISTS migration.ytd_takeon (
     tenant TEXT NOT NULL, employee_id BIGINT NOT NULL, legacy_empno TEXT NOT NULL,
@@ -34,31 +38,43 @@ CREATE TABLE IF NOT EXISTS migration.amount_quarantine (
     tenant TEXT NOT NULL, legacy_empno TEXT NOT NULL, code TEXT, codetype TEXT,
     amount_minor BIGINT, reason TEXT NOT NULL, loaded_at TEXT NOT NULL);
 
--- Stage source amounts, resolving codetype + the pipro employee link.
+-- ---- CATALOGUE: the unified amount-code definitions (every Q ordinal) --------
+INSERT INTO settings_employee_amounts (
+    ordinal_no, name, code_type, currency_code, code_limit_minor, tax_type,
+    tax_inc_asn, consol_code, adjust_flag, manual_display, prorata, qmf_display)
+SELECT
+    s."OrdinalNo", s."Description", upper(nullif(s."CodeType",'')), s."currency_code",
+    (COALESCE(s."CodeLimit",0)*100)::bigint, s."TaxType", s."TaxIncAsn", s."ConsolCode",
+    s."AdjustFlag",
+    CASE WHEN s."ManualDisplayInd" THEN 1 ELSE 0 END,
+    CASE WHEN s."ProRataInd"       THEN 1 ELSE 0 END,
+    CASE WHEN s."QmfDisplayInd"    THEN 1 ELSE 0 END
+FROM :"legacy_schema".settings_employee_amounts s
+ON CONFLICT (ordinal_no) DO NOTHING;
+
+-- ---- Stage the per-employee amounts (join catalogue on OrdinalNo) -----------
 CREATE TEMP TABLE _amt ON COMMIT DROP AS
 SELECT
     a."EmployeeNo"::text                AS legacy_empno,
-    e.user_id                           AS employee_id,     -- pipro link; NULL if the employee didn't load
+    e.user_id                           AS employee_id,      -- pipro link; NULL if employee didn't load
     e.hired_at                          AS hired_at,
-    a."Code"                            AS code,
-    a."Description"                     AS label,           -- CONFIRM: label source
-    (a.amount * 100)::bigint            AS amount_minor,    -- CONFIRM: ×100 if major units
-    upper(nullif(s."codetype", ''))     AS codetype         -- CONFIRM: settings_employee_amounts.codetype
+    a."OrdinalNo"                       AS ordinal_no,       -- the Q-bank address (preserved)
+    s."Description"                     AS name,             -- code name (CONFIRM)
+    (a."Amount_Q" * 100)::bigint        AS amount_minor,     -- CONFIRM: ×100 major→minor
+    upper(nullif(s."CodeType", ''))     AS codetype
 FROM :"legacy_schema".employee_amounts a
-LEFT JOIN :"legacy_schema".settings_employee_amounts s      -- CONFIRM: code-definition table + join key
-       ON s."Code" = a."Code"
+LEFT JOIN :"legacy_schema".settings_employee_amounts s ON s."OrdinalNo" = a."OrdinalNo"
 LEFT JOIN employees e ON e.id = 'emp-' || a."EmployeeNo"::text
-WHERE a.amount <> 0;
+WHERE a."Amount_Q" <> 0;
 
--- E → earnings (employee loaded, codetype E).
+-- E → earnings.  CHOOSE: label/payroll_code scheme (using catalogue name here).
 INSERT INTO employee_recurring_earnings (
     id, employee_id, label, amount_minor, taxable, uif_applicable,
     effective_from, recorded_at, created_by_user_id, ended_at, payroll_code)
 SELECT
-    COALESCE((SELECT max(id) FROM employee_recurring_earnings),0) + row_number() OVER (ORDER BY employee_id, code),
-    employee_id, label, amount_minor,
-    1, 1,                                      -- CHOOSE: taxable / uif flags (from settings_employee_amounts)
-    hired_at, :'cutover', :system_user_id, NULL, code
+    COALESCE((SELECT max(id) FROM employee_recurring_earnings),0) + row_number() OVER (ORDER BY employee_id, ordinal_no),
+    employee_id, name, amount_minor, 1, 1,     -- CHOOSE: taxable / uif from catalogue
+    hired_at, :'cutover', :system_user_id, NULL, name
 FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'E';
 
 -- D → deductions.
@@ -66,27 +82,38 @@ INSERT INTO employee_recurring_deductions (
     id, employee_id, label, amount_minor, reduces_taxable,
     effective_from, recorded_at, created_by_user_id, ended_at, payroll_code)
 SELECT
-    COALESCE((SELECT max(id) FROM employee_recurring_deductions),0) + row_number() OVER (ORDER BY employee_id, code),
-    employee_id, label, amount_minor,
-    0,                                         -- CHOOSE: reduces_taxable (pre-tax) from settings
-    hired_at, :'cutover', :system_user_id, NULL, code
+    COALESCE((SELECT max(id) FROM employee_recurring_deductions),0) + row_number() OVER (ORDER BY employee_id, ordinal_no),
+    employee_id, name, amount_minor, 0,        -- CHOOSE: reduces_taxable from catalogue
+    hired_at, :'cutover', :system_user_id, NULL, name
 FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'D';
+
+-- C → employer cost (Q-addressed by ordinal).
+INSERT INTO employee_employer_cost (employee_id, ordinal_no, amount_minor)
+SELECT employee_id, ordinal_no, amount_minor
+FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'C'
+ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
 
 -- Y → YTD take-on staging (always mid-year; never dropped).
 INSERT INTO migration.ytd_takeon (tenant, employee_id, legacy_empno, code, amount_minor, loaded_at)
-SELECT :'tenant_schema', employee_id, legacy_empno, code, amount_minor, :'cutover'
+SELECT :'tenant_schema', employee_id, legacy_empno, name, amount_minor, :'cutover'
 FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'Y';
 
--- Anything else with a loaded employee → quarantine (codetype not E/D/Y, or unknown).
+-- Any OTHER recognised codetype (T,H,S,J,B,…) → deprecated (LIVE, Q-addressed).
+INSERT INTO employee_deprecated_amounts (employee_id, ordinal_no, amount_minor, codetype)
+SELECT employee_id, ordinal_no, amount_minor, codetype
+FROM _amt WHERE employee_id IS NOT NULL AND codetype IS NOT NULL
+  AND codetype NOT IN ('E','D','C','Y')
+ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
+
+-- Codetype not found (no catalogue row for the ordinal) → quarantine (an error).
 INSERT INTO migration.amount_quarantine (tenant, legacy_empno, code, codetype, amount_minor, reason, loaded_at)
-SELECT :'tenant_schema', legacy_empno, code, codetype, amount_minor,
-       CASE WHEN codetype IS NULL THEN 'codetype_not_found' ELSE 'codetype_not_EDY' END, :'cutover'
-FROM _amt WHERE employee_id IS NOT NULL AND (codetype IS NULL OR codetype NOT IN ('E','D','Y'));
+SELECT :'tenant_schema', legacy_empno, name, codetype, amount_minor, 'codetype_not_found', :'cutover'
+FROM _amt WHERE employee_id IS NOT NULL AND codetype IS NULL;
 
 -- Orphans: amount rows whose employee never loaded → quarantine.
 INSERT INTO migration.amount_quarantine (tenant, legacy_empno, code, codetype, amount_minor, reason, loaded_at)
-SELECT :'tenant_schema', legacy_empno, code, codetype, amount_minor, 'employee_not_loaded', :'cutover'
+SELECT :'tenant_schema', legacy_empno, name, codetype, amount_minor, 'employee_not_loaded', :'cutover'
 FROM _amt WHERE employee_id IS NULL;
 
 COMMIT;
-\echo 'Done (amounts routed by codetype):' :tenant_schema
+\echo 'Done (catalogue + amounts routed by codetype):' :tenant_schema
