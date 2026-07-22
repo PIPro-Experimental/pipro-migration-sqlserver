@@ -59,8 +59,8 @@ SELECT
     e.user_id                           AS employee_id,      -- pipro link; NULL if employee didn't load
     e.hired_at                          AS hired_at,
     a."OrdinalNo"                       AS ordinal_no,       -- the Q-bank address (preserved)
-    s."Description"                     AS name,             -- code name (CONFIRM)
-    (a."Amount_Q" * 100)::bigint        AS amount_minor,     -- CONFIRM: ×100 major→minor
+    s."Description"                     AS name,             -- code name
+    (a."Amount_Q" * 100)::bigint        AS amount_minor,     -- ×100 major→minor
     upper(nullif(s."CodeType", ''))     AS codetype
 FROM :"legacy_schema".employee_amounts a
 LEFT JOIN :"legacy_schema".settings_employee_amounts s ON s."OrdinalNo" = a."OrdinalNo"

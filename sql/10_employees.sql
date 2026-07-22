@@ -32,28 +32,29 @@ SET search_path TO :"tenant_schema", public;
 CREATE TEMP TABLE _src ON COMMIT DROP AS
 SELECT
     e."EmployeeNo"::text                               AS legacy_empno,       -- join key → minted user_id
-    e."EmployeeId_F01"::text                           AS employee_code,      -- CONFIRM: F01 (unique, non-blank, numeric)
+    e."EmployeeId_F01"::text                           AS employee_code,      -- SQL server EmpNo - unique, non-blank, numeric, possible zero
     e."Surname_F02"                                    AS last_name,
     e."GivenNames_F21"                                 AS first_name,
-    COALESCE(NULLIF(e."EmailAddress_F40", ''),
-             e."EmployeeId_F01"::text || '@migrated.invalid') AS email,        -- CONFIRM: synthesise when F40 blank
     e."Identity_F12"::text                             AS id_number,
-    e."BirthDate_D930"::text                           AS date_of_birth,      -- CONFIRM: value is ISO / date-castable
-    e."EngageDate_D931"::text                          AS hired_at,           -- NOT NULL in target
-    NULLIF(e."DischargeDate_D932"::text, '')           AS terminated_at,
+    e."BirthDate_D930"::text                           AS date_of_birth,      -- source sql format YYYY-MM-DD not null
+    e."EngageDate_D931"::text                          AS hired_at,           -- source sql format YYYY-MM-DD not null
+    NULLIF(e."DischargeDate_D932"::text, '')           AS terminated_at,      -- source sql format YYYY-MM-DD mostly null
     e."Title_F28"                                      AS title,
-    CASE upper(left(coalesce(e."Gender_F22",''),1))
-        WHEN 'M' THEN 'male' WHEN 'F' THEN 'female' ELSE 'unspecified' END AS gender, -- CHOOSE: code→enum map
-    'unspecified'                                      AS marital_status,     -- CHOOSE: map if you have a source
-    upper(nullif(e."PassportCountry_F46", ''))::char(2) AS nationality_country_code, -- CHOOSE: which field + ISO-2
-    -- Basic monthly rate lives on the legacy AMOUNT line, not the masterfile.
-    (COALESCE(a.amount, 0) * 100)::bigint              AS rate_minor,         -- CONFIRM: ×100 if major units
-    upper(coalesce(nullif(e."TaxCountryCode_F14",''),'ZA'))::char(3)         AS currency, -- CHOOSE: real currency source
-    e."Occupation_F11"                                 AS occupation,       -- CONFIRM: interim occupation_f11
-    e."Category_F13"                                   AS category          -- CONFIRM: interim category_f13
+    e."Occupation_F11"                                 AS occupation,
+    e."Category_F13"                                   AS category,
+    'unspecified'                                      AS marital_status,
+    1                                                  AS currency,
+    upper(nullif(e."TaxCountryCode_F14", ''))::char(3) AS nationality_country_code, -- there are two sets of country codes, one char(2) & one char(3)
+    CASE upper(left(coalesce(e."Gender_F22",''),1)) WHEN 'M' THEN 'male' WHEN 'F' THEN 'female' ELSE 'unspecified' END AS gender,
+    COALESCE(NULLIF(e."EmailAddress_F40", ''), e."EmployeeId_F01"::text || '@migrated.invalid') AS email,        -- synthesise when F40 blank
+    (COALESCE(a.amount, 0) * 100)::bigint              AS rate_minor,
 FROM :"legacy_schema".employees e
-LEFT JOIN :"legacy_schema".employee_amounts a         -- CHOOSE: real rate table/columns
-       ON a."EmployeeNo" = e."EmployeeNo" AND a."Code" = 'BASIC';            -- CHOOSE: the BASIC code
+LEFT JOIN :"legacy_schema".employee_amounts a
+LEFT JOIN :"legacy_schema".settings_taxcodes t
+       ON a."EmployeeNo" = e."EmployeeNo"
+	   AND a."Payroll_F04" = t."Payroll"
+	   AND e."OrdinalNo" = t."BasicCode"
+	   WHERE t.Currency = 1;
 
 -- ---------------------------------------------------------------------------
 -- Step 2: pipro_core_users (public) — MINT one login-user per employee and
@@ -73,8 +74,7 @@ BEGIN
     INSERT INTO public.pipro_core_users
         (email, password_hash, first_name, last_name, is_active, created_at)
     VALUES
-        (r.email, '!migrated-no-login',   -- CONFIRM: unusable hash; reset before login
-         r.first_name, r.last_name, 1, current_timestamp::text)
+        (r.email, '!migrated-no-login', r.first_name, r.last_name, 1, current_timestamp::text)
     RETURNING id INTO new_uid;
     INSERT INTO _idmap (legacy_empno, user_id) VALUES (r.legacy_empno, new_uid);
   END LOOP;

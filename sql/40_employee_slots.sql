@@ -45,7 +45,7 @@ JOIN employees e ON e.id = 'emp-' || a."EmployeeNo"::text
 ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
 
 INSERT INTO employee_dates (employee_id, ordinal_no, value)
-SELECT e.user_id, d."OrdinalNo", d."Date_D0"::text          -- CONFIRM: desktop date → ISO text
+SELECT e.user_id, d."OrdinalNo", d."Date_D0"::text          -- source sql format YYYY-MM-DD not null
 FROM :"legacy_schema".employee_dates d
 JOIN employees e ON e.id = 'emp-' || d."EmployeeNo"::text
 ON CONFLICT (employee_id, ordinal_no) DO NOTHING;

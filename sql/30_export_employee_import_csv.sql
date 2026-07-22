@@ -26,12 +26,11 @@
 \set ON_ERROR_STOP on
 COPY (
     SELECT
-        e."EmployeeId_F01"                                          AS employee_code,   -- CONFIRM
+        e."EmployeeId_F01"                                          AS employee_code,
         e."GivenNames_F21"                                          AS first_name,
         e."Surname_F02"                                             AS last_name,
-        COALESCE(NULLIF(e."EmailAddress_F40",''),
-                 e."EmployeeId_F01" || '@migrated.invalid')         AS email,           -- CONFIRM
-        e."EngageDate_D931"                                         AS hired_at,         -- CONFIRM: YYYY-MM-DD
+        COALESCE(NULLIF(e."EmailAddress_F40",''), e."EmployeeId_F01" || '@migrated.invalid')         AS email,
+        e."EngageDate_D931"                                         AS hired_at,         -- YYYY-MM-DD
         e."Identity_F12"                                            AS id_number,
         (COALESCE(bas.amount,0)  * 100)::bigint                     AS salary_minor,     -- CONFIRM: BASIC line, ×100
         upper(coalesce(nullif(e."TaxCountryCode_F14",''),'ZA'))     AS currency,         -- CHOOSE
@@ -40,6 +39,9 @@ COPY (
         (COALESCE(cell.amount,0) * 100)::bigint                     AS allowance_cell_minor,        -- CHOOSE
         (COALESCE(ret.amount,0)  * 100)::bigint                     AS deduction_retirement_minor,  -- CHOOSE
         (COALESCE(medd.amount,0) * 100)::bigint                     AS deduction_medical_minor      -- CHOOSE
+		
+		????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????
+		
         -- + medical_scheme_name, medical_dependants, and the address / bank /
         --   tax-status / phone / next-of-kin / loan columns — add once you've
         --   pulled their exact keys from the import template.
