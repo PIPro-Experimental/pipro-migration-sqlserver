@@ -11,13 +11,17 @@
 -- ===========================================================================
 
 CREATE TABLE IF NOT EXISTS migration_map (
-    legacy_schema      TEXT PRIMARY KEY,  -- source schema in the docker DB (e.g. legacy_acme)
-    tenant_slug        TEXT NOT NULL,     -- target: writes into tenant_<slug> (must already exist)
-    target_payroll_id  INTEGER NOT NULL   -- target: tenant_<slug>.payrolls.id (must already exist)
+    legacy_schema         TEXT PRIMARY KEY,  -- source schema in the docker DB (e.g. legacy_acme)
+    tenant_slug           TEXT NOT NULL,     -- target: writes into tenant_<slug> (must already exist)
+    target_payroll_id     INTEGER NOT NULL,  -- target: tenant_<slug>.payrolls.id (must already exist)
+    legacy_payroll_number INTEGER NOT NULL DEFAULT 1  -- the interim Payroll number this schema holds;
+                                             -- fills the payroll scoping column on carried
+                                             -- SchemaType.PAYROLL tables that had none (55_legacy_carry)
 );
+ALTER TABLE migration_map ADD COLUMN IF NOT EXISTS legacy_payroll_number INTEGER NOT NULL DEFAULT 1;
 
 -- DECISION: seed your real mappings.
-INSERT INTO migration_map (legacy_schema, tenant_slug, target_payroll_id) VALUES
-    ('legacy_acme',   'acme',   1),
-    ('legacy_globex', 'globex', 1)
+INSERT INTO migration_map (legacy_schema, tenant_slug, target_payroll_id, legacy_payroll_number) VALUES
+    ('legacy_acme',   'acme',   1, 1),
+    ('legacy_globex', 'globex', 1, 1)
 ON CONFLICT (legacy_schema) DO NOTHING;

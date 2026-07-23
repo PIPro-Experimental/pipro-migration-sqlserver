@@ -31,30 +31,37 @@ SET search_path TO :"tenant_schema", public;
 -- ---------------------------------------------------------------------------
 CREATE TEMP TABLE _src ON COMMIT DROP AS
 SELECT
-    e."EmployeeNo"::text                               AS legacy_empno,       -- join key → minted user_id
-    e."EmployeeId_F01"::text                           AS employee_code,      -- SQL server EmpNo - unique, non-blank, numeric, possible zero
-    e."Surname_F02"                                    AS last_name,
-    e."GivenNames_F21"                                 AS first_name,
-    e."Identity_F12"::text                             AS id_number,
-    e."BirthDate_D930"::text                           AS date_of_birth,      -- source sql format YYYY-MM-DD not null
-    e."EngageDate_D931"::text                          AS hired_at,           -- source sql format YYYY-MM-DD not null
-    NULLIF(e."DischargeDate_D932"::text, '')           AS terminated_at,      -- source sql format YYYY-MM-DD mostly null
-    e."Title_F28"                                      AS title,
-    e."Occupation_F11"                                 AS occupation,
-    e."Category_F13"                                   AS category,
+    e.employeeno::text                               AS legacy_empno,       -- join key → minted user_id
+    e.employeeid_f01::text                           AS employee_code,      -- SQL server EmpNo - unique, non-blank, numeric, possible zero
+    e.surname_f02                                    AS last_name,
+    e.givennames_f21                                 AS first_name,
+    e.identity_f12::text                             AS id_number,
+    e.birthdate_d930::text                           AS date_of_birth,      -- source sql format YYYY-MM-DD not null
+    e.engagedate_d931::text                          AS hired_at,           -- source sql format YYYY-MM-DD not null
+    NULLIF(e.dischargedate_d932::text, '')           AS terminated_at,      -- source sql format YYYY-MM-DD mostly null
+    e.title_f28                                      AS title,
+    e.occupation_f11                                 AS occupation,
+    e.category_f13                                   AS category,
     'unspecified'                                      AS marital_status,
     1                                                  AS currency,
-    upper(nullif(e."TaxCountryCode_F14", ''))::char(3) AS nationality_country_code, -- there are two sets of country codes, one char(2) & one char(3)
-    CASE upper(left(coalesce(e."Gender_F22",''),1)) WHEN 'M' THEN 'male' WHEN 'F' THEN 'female' ELSE 'unspecified' END AS gender,
-    COALESCE(NULLIF(e."EmailAddress_F40", ''), e."EmployeeId_F01"::text || '@migrated.invalid') AS email,        -- synthesise when F40 blank
-    (COALESCE(a.amount, 0) * 100)::bigint              AS rate_minor,
+    upper(nullif(e.taxcountrycode_f14, ''))::char(3) AS nationality_country_code, -- there are two sets of country codes, one char(2) & one char(3)
+    CASE upper(left(coalesce(e.gender_f22,''),1)) WHEN 'M' THEN 'male' WHEN 'F' THEN 'female' ELSE 'unspecified' END AS gender,
+    COALESCE(NULLIF(e.emailaddress_f40, ''), e.employeeid_f01::text || '@migrated.invalid') AS email,        -- synthesise when F40 blank
+    (COALESCE(a.amount_q, 0) * 100)::bigint          AS rate_minor
+-- Basic rate (owner decision 2026-07-23): the AUTHORITATIVE basic rate lives in
+-- the Q-bank (employee_amounts, imported whole by 20_recurring) and is addressed
+-- via settings_taxcodes.basic_code — the calc doesn't know it's "basic rate",
+-- it just reads (Q, basic_code, currency). settings_taxcodes is imported by
+-- 55_legacy_carry_payroll.sql, so that addressing keeps working in pipro.
+-- What we copy here is only the CONVENIENCE single default-currency rate for
+-- employees.salary_current_minor / the employee_contract row.
 FROM :"legacy_schema".employees e
-LEFT JOIN :"legacy_schema".employee_amounts a
 LEFT JOIN :"legacy_schema".settings_taxcodes t
-       ON a."EmployeeNo" = e."EmployeeNo"
-	   AND a."Payroll_F04" = t."Payroll"
-	   AND e."OrdinalNo" = t."BasicCode"
-	   WHERE t.Currency = 1;
+       ON t.payroll = e.payroll_f04
+      AND t.currency = 1                             -- CHOOSE: default-currency slot for the convenience copy
+LEFT JOIN :"legacy_schema".employee_amounts a
+       ON a.employeeno = e.employeeno
+      AND a.ordinalno = t.basiccode;
 
 -- ---------------------------------------------------------------------------
 -- Step 2: pipro_core_users (public) — MINT one login-user per employee and
@@ -148,9 +155,9 @@ WHERE k.eff IS NOT NULL;   -- the 'terminated' row only when a discharge date ex
 -- Step 7 (second pass): manager_id self-FK (references employees.id TEXT).
 -- CHOOSE: needs the legacy reports-to EmpNo column; stubbed.
 -- ---------------------------------------------------------------------------
--- UPDATE employees c SET manager_id = 'emp-' || src."ManagerEmpNo"
+-- UPDATE employees c SET manager_id = 'emp-' || src.managerempno
 -- FROM :"legacy_schema".employees src
--- WHERE src."EmployeeNo"::text = substring(c.id from 5);
+-- WHERE src.employeeno::text = substring(c.id from 5);
 
 COMMIT;
 \echo 'Done (core):' :tenant_schema '<-' :legacy_schema

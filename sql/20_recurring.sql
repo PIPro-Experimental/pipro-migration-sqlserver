@@ -43,29 +43,29 @@ INSERT INTO settings_employee_amounts (
     ordinal_no, name, code_type, currency_code, code_limit_minor, tax_type,
     tax_inc_asn, consol_code, adjust_flag, manual_display, prorata, qmf_display)
 SELECT
-    s."OrdinalNo", s."Description", upper(nullif(s."CodeType",'')), s."currency_code",
-    (COALESCE(s."CodeLimit",0)*100)::bigint, s."TaxType", s."TaxIncAsn", s."ConsolCode",
-    s."AdjustFlag",
-    CASE WHEN s."ManualDisplayInd" THEN 1 ELSE 0 END,
-    CASE WHEN s."ProRataInd"       THEN 1 ELSE 0 END,
-    CASE WHEN s."QmfDisplayInd"    THEN 1 ELSE 0 END
+    s.ordinalno, s.description, upper(nullif(s.codetype,'')), s.currency_code,
+    (COALESCE(s.codelimit,0)*100)::bigint, s.taxtype, s.taxincasn, s.consolcode,
+    s.adjustflag,
+    CASE WHEN s.manualdisplayind THEN 1 ELSE 0 END,
+    CASE WHEN s.prorataind       THEN 1 ELSE 0 END,
+    CASE WHEN s.qmfdisplayind    THEN 1 ELSE 0 END
 FROM :"legacy_schema".settings_employee_amounts s
 ON CONFLICT (ordinal_no) DO NOTHING;
 
 -- ---- Stage the per-employee amounts (join catalogue on OrdinalNo) -----------
 CREATE TEMP TABLE _amt ON COMMIT DROP AS
 SELECT
-    a."EmployeeNo"::text                AS legacy_empno,
+    a.employeeno::text                AS legacy_empno,
     e.user_id                           AS employee_id,      -- pipro link; NULL if employee didn't load
     e.hired_at                          AS hired_at,
-    a."OrdinalNo"                       AS ordinal_no,       -- the Q-bank address (preserved)
-    s."Description"                     AS name,             -- code name
-    (a."Amount_Q" * 100)::bigint        AS amount_minor,     -- ×100 major→minor
-    upper(nullif(s."CodeType", ''))     AS codetype
+    a.ordinalno                       AS ordinal_no,       -- the Q-bank address (preserved)
+    s.description                     AS name,             -- code name
+    (a.amount_q * 100)::bigint        AS amount_minor,     -- ×100 major→minor
+    upper(nullif(s.codetype, ''))     AS codetype
 FROM :"legacy_schema".employee_amounts a
-LEFT JOIN :"legacy_schema".settings_employee_amounts s ON s."OrdinalNo" = a."OrdinalNo"
-LEFT JOIN employees e ON e.id = 'emp-' || a."EmployeeNo"::text
-WHERE a."Amount_Q" <> 0;
+LEFT JOIN :"legacy_schema".settings_employee_amounts s ON s.ordinalno = a.ordinalno
+LEFT JOIN employees e ON e.id = 'emp-' || a.employeeno::text
+WHERE a.amount_q <> 0;
 
 -- E → earnings.  CHOOSE: label/payroll_code scheme (using catalogue name here).
 INSERT INTO employee_recurring_earnings (
