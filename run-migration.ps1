@@ -42,7 +42,8 @@ if (-not $rows) { Write-Host "==> migration_map is empty — edit sql/00_migrati
 
 # --- Populate each tenant (10 core → 20 recurring → slots → legacy carry) -------
 $scripts = @('sql/10_employees.sql', 'sql/20_recurring.sql', 'sql/40_employee_slots.sql',
-             'sql/50_legacy_carry_company.sql', 'sql/55_legacy_carry_payroll.sql') | ForEach-Object { Join-Path $here $_ }
+             'sql/50_legacy_carry_company.sql', 'sql/55_legacy_carry_payroll.sql',
+             'sql/60_employee_accounts.sql') | ForEach-Object { Join-Path $here $_ }
 foreach ($row in $rows) {
     $c = $row.Split('|')
     $legacy = $c[0]; $slug = $c[1]; $payrollId = $c[2]; $payrollNumber = $c[3]
