@@ -63,8 +63,8 @@ effective on/before payday.
 | 5 | **employees** | first_name, last_name, employee_code, date_of_birth (age → PAYE rebate) | 177 | `PW_IMF` masterfile | `employees` (monster table) |
 | 6 | **employee_contracts** | monthly `rate_minor` (BASIC), `currency`, as-of-payday | 161, 181, 839 | `PW_IMF` rate F-codes | `employees` rate fields |
 | 7 | **calc_program** | program-as-data VM instructions (ADR-0019), per `program_key` = `payroll-<id>` → `default` → `SalaryOnlyProgram` | 515 | `PW_Parm_Calculations` | `settings_calculations` |
-| 8 | **employee_recurring_earnings** | recurring earning lines (label, amount, taxable, uif, payroll_code) | 625, 639 | `PW_IMF` earning fields | `employee_amounts`, `settings_employee_amounts` |
-| 9 | **employee_recurring_deductions** | recurring deduction lines (label, amount, reduces_taxable, payroll_code) | 664, 683 | `PW_IMF` deduction fields | `employee_amounts` |
+| 8 | **employee_amount_earnings** | recurring earning lines (label, amount, taxable, uif, payroll_code) | 625, 639 | `PW_IMF` earning fields | `employee_amounts`, `settings_employee_amounts` |
+| 9 | **employee_amount_deductions** | recurring deduction lines (label, amount, reduces_taxable, payroll_code) | 664, 683 | `PW_IMF` deduction fields | `employee_amounts` |
 | 10 | **payroll_code_catalogue** | addable code templates: inclusion_fraction, subject_to_uif, reduces_taxable, sars_code | 573, 597, 665 | `settings_taxcodes` / `AddTaxCode` | `settings_taxcodes`, `settings_calculations` |
 | 11 | **employee_loans** | active in-term loans → coded `LOAN` post-tax deduction | 702 | third-party / loan masterfile | `employee_thirdparty_transact` |
 | 12 | **employee_status_history** | status as-of-payday (active/suspended/terminated → payable gate) | 811 | `PW_IMF` status/discharge F-codes | `employees` status fields |

@@ -4,8 +4,8 @@
 -- ONCE PER TENANT. Nothing is silently dropped.
 --
 --   settings_employee_amounts (catalogue, ALL codes incl. J) → settings_employee_amounts
---   codetype E → employee_recurring_earnings
---   codetype D → employee_recurring_deductions
+--   codetype E → employee_amount_earnings
+--   codetype D → employee_amount_deductions
 --   codetype C → employee_amount_employer_cost     (cost-to-company; Q-addressed)
 --   codetype B → employee_amount_balances          (LIVE working values: leave
 --                                                   owed/taken, carry-forwards,
@@ -75,21 +75,21 @@ LEFT JOIN employees e ON e.id = 'emp-' || a.employeeno::text
 WHERE a.amount_q <> 0;
 
 -- E → earnings.  CHOOSE: label/payroll_code scheme (using catalogue name here).
-INSERT INTO employee_recurring_earnings (
+INSERT INTO employee_amount_earnings (
     id, employee_id, label, amount_minor, taxable, uif_applicable,
     effective_from, recorded_at, created_by_user_id, ended_at, payroll_code)
 SELECT
-    COALESCE((SELECT max(id) FROM employee_recurring_earnings),0) + row_number() OVER (ORDER BY employee_id, ordinal_no),
+    COALESCE((SELECT max(id) FROM employee_amount_earnings),0) + row_number() OVER (ORDER BY employee_id, ordinal_no),
     employee_id, name, amount_minor, 1, 1,     -- CHOOSE: taxable / uif from catalogue
     hired_at, :'cutover', :system_user_id, NULL, name
 FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'E';
 
 -- D → deductions.
-INSERT INTO employee_recurring_deductions (
+INSERT INTO employee_amount_deductions (
     id, employee_id, label, amount_minor, reduces_taxable,
     effective_from, recorded_at, created_by_user_id, ended_at, payroll_code)
 SELECT
-    COALESCE((SELECT max(id) FROM employee_recurring_deductions),0) + row_number() OVER (ORDER BY employee_id, ordinal_no),
+    COALESCE((SELECT max(id) FROM employee_amount_deductions),0) + row_number() OVER (ORDER BY employee_id, ordinal_no),
     employee_id, name, amount_minor, 0,        -- CHOOSE: reduces_taxable from catalogue
     hired_at, :'cutover', :system_user_id, NULL, name
 FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'D';

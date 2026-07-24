@@ -40,8 +40,8 @@ legacy `pw_parm_codes`) — **nothing is silently dropped**:
 
 | codetype | routed to |
 |---|---|
-| `E` earning | `employee_recurring_earnings` |
-| `D` deduction | `employee_recurring_deductions` |
+| `E` earning | `employee_amount_earnings` |
+| `D` deduction | `employee_amount_deductions` |
 | `C` cost-to-company | `employee_employer_cost` |
 | `Y` YTD total | `migration.ytd_takeon` (mid-year staging) |
 | other recognised (`T H S J B …`) | `employee_deprecated_amounts` — **LIVE, `Q`-addressed, phase-out** |
@@ -61,8 +61,8 @@ inventory per client. Confirmed meanings + eventual homes:
 
 | codetype | meaning | eventual pipro home |
 |---|---|---|
-| `E` | earning | `employee_recurring_earnings` ✅ done |
-| `D` | deduction | `employee_recurring_deductions` ✅ done |
+| `E` | earning | `employee_amount_earnings` ✅ done |
+| `D` | deduction | `employee_amount_deductions` ✅ done |
 | `Y` | YTD total (cleared at year-end) | `cumulative_ledger`/`payslip_fact` (mid-year take-on) — staged |
 | `C` | cost-to-company (employer cost) | `employee_employer_cost` ✅ |
 | `T` | time worked (decimal; std/1.5×/2×) | `employee_deprecated_amounts` (phase-out) |
@@ -100,7 +100,7 @@ aggregate-code map + a per-period vs opening-balance decision (only matters for
 
 The **target side is proven**: all 7 destination tables (`pipro_core_users`,
 `employees`, `employee_contracts`, `employee_payroll_assignments`,
-`employee_status_history`, `employee_recurring_earnings/deductions`) were exercised
+`employee_status_history`, `employee_amount_earnings/deductions`) were exercised
 with synthetic rows against the live schema inside a rolled-back transaction — every
 INSERT's columns/types/constraints check out. What remains is the **source side**:
 the `-- DECISION` mappings + confirming the legacy column names against your desktop DB.
