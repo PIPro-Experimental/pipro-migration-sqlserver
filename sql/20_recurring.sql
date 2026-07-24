@@ -6,9 +6,13 @@
 --   settings_employee_amounts (catalogue, ALL codes incl. J) → settings_employee_amounts
 --   codetype E → employee_recurring_earnings
 --   codetype D → employee_recurring_deductions
---   codetype C → employee_employer_cost            (cost-to-company; Q-addressed)
+--   codetype C → employee_amount_employer_cost     (cost-to-company; Q-addressed)
+--   codetype B → employee_amount_balances          (LIVE working values: leave
+--                                                   owed/taken, carry-forwards,
+--                                                   basic rate per currency —
+--                                                   RAW 4dp, no ×100)
 --   codetype Y → migration.ytd_takeon              (mid-year YTD take-on staging)
---   any OTHER recognised codetype (T,H,S,J,B,…)    → employee_deprecated_amounts
+--   any OTHER recognised codetype (T,H,S,J,…)      → employee_amount_deprecated
 --                                                    (LIVE, Q-addressed, phase-out;
 --                                                     J = unsupported, calc treats
 --                                                     as an amount or logs+skips)
@@ -24,7 +28,9 @@
 --
 -- FOLLOW-UP: materialise migration.ytd_takeon → cumulative_ledger/payslip_fact
 -- (needs the legacy-Y-code → aggregate-code map + per-period vs opening-balance
--- decision); and the per-code B classification (leave→leave_balances, etc.).
+-- decision). B codes now land WHOLE in employee_amount_balances (2026-07-23);
+-- any per-code refinement (leave→leave_balances, age→drop) is optional, later,
+-- and data-driven off the catalogue.
 -- ===========================================================================
 \set ON_ERROR_STOP on
 BEGIN;
@@ -61,6 +67,7 @@ SELECT
     a.ordinalno                       AS ordinal_no,       -- the Q-bank address (preserved)
     s.description                     AS name,             -- code name
     (a.amount_q * 100)::bigint        AS amount_minor,     -- ×100 major→minor
+    a.amount_q                        AS amount_raw,       -- full 4dp (balances route)
     upper(nullif(s.codetype, ''))     AS codetype
 FROM :"legacy_schema".employee_amounts a
 LEFT JOIN :"legacy_schema".settings_employee_amounts s ON s.ordinalno = a.ordinalno
@@ -88,9 +95,16 @@ SELECT
 FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'D';
 
 -- C → employer cost (Q-addressed by ordinal).
-INSERT INTO employee_employer_cost (employee_id, ordinal_no, amount_minor)
+INSERT INTO employee_amount_employer_cost (employee_id, ordinal_no, amount_minor)
 SELECT employee_id, ordinal_no, amount_minor
 FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'C'
+ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
+
+-- B → balances (LIVE working values; RAW 4dp — rates/day counts, no ×100).
+-- Per-code refinement (leave→leave_balances etc.) is a later, data-driven pass.
+INSERT INTO employee_amount_balances (employee_id, ordinal_no, amount)
+SELECT employee_id, ordinal_no, amount_raw
+FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'B'
 ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
 
 -- Y → YTD take-on staging (always mid-year; never dropped).
@@ -98,11 +112,13 @@ INSERT INTO migration.ytd_takeon (tenant, employee_id, legacy_empno, code, amoun
 SELECT :'tenant_schema', employee_id, legacy_empno, name, amount_minor, :'cutover'
 FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'Y';
 
--- Any OTHER recognised codetype (T,H,S,J,B,…) → deprecated (LIVE, Q-addressed).
-INSERT INTO employee_deprecated_amounts (employee_id, ordinal_no, amount_minor, codetype)
+-- Any OTHER recognised codetype (T,H,S,J,…) → deprecated (LIVE, Q-addressed).
+-- NOTE ×100 truncates below 2dp: fine for J (DDMMYY ints) and S (scratch), but
+-- if T/H time values carry >2dp in your data, promote them to balances instead.
+INSERT INTO employee_amount_deprecated (employee_id, ordinal_no, amount_minor, codetype)
 SELECT employee_id, ordinal_no, amount_minor, codetype
 FROM _amt WHERE employee_id IS NOT NULL AND codetype IS NOT NULL
-  AND codetype NOT IN ('E','D','C','Y')
+  AND codetype NOT IN ('E','D','C','Y','B')
 ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
 
 -- Codetype not found (no catalogue row for the ordinal) → quarantine (an error).
