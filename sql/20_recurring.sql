@@ -11,11 +11,17 @@
 --                                                   owed/taken, carry-forwards,
 --                                                   basic rate per currency —
 --                                                   RAW 4dp, no ×100)
---   codetype Y → migration.ytd_takeon              (mid-year YTD take-on staging)
---   any OTHER recognised codetype (T,H,S,J,…)      → employee_amount_deprecated
---                                                    (LIVE, Q-addressed, phase-out;
---                                                     J = unsupported, calc treats
---                                                     as an amount or logs+skips)
+--   codetype T → employee_amount_balances          (time, already decimal — RAW)
+--   codetype H → employee_amount_balances          (hours HH:mm → CONVERTED to
+--                                                   decimal hours; minutes ≥ 60
+--                                                   → quarantine as bad data)
+--   codetype Y → migration.ytd_takeon              (mid-year YTD take-on staging
+--                                                   → cumulative_ledger, see
+--                                                   FOLLOW-UP below)
+--   any OTHER recognised codetype (S,J,…)          → employee_amount_deprecated
+--                                                    (dead codes; J = unsupported,
+--                                                     calc treats as an amount or
+--                                                     logs+skips)
 --   codetype not found (no catalogue row)          → migration.amount_quarantine
 --   employee never loaded (orphan)                 → migration.amount_quarantine
 --
@@ -102,23 +108,43 @@ ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
 
 -- B → balances (LIVE working values; RAW 4dp — rates/day counts, no ×100).
 -- Per-code refinement (leave→leave_balances etc.) is a later, data-driven pass.
+-- T → balances too (owner decision 2026-07-23): time values, already decimal.
 INSERT INTO employee_amount_balances (employee_id, ordinal_no, amount)
 SELECT employee_id, ordinal_no, amount_raw
-FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'B'
+FROM _amt WHERE employee_id IS NOT NULL AND codetype IN ('B', 'T')
 ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
+
+-- H → balances, CONVERTED HH:mm → decimal hours (owner decision 2026-07-23:
+-- wage-type workers are paid per hours worked; balances carry the decimal
+-- form, matching T). 12.45 means 12h45m → 12.75. trunc() is toward zero, so
+-- the sign carries: -12.30 → -12.5. The codetype stays 'H' in the catalogue,
+-- recording that these slots were converted.
+INSERT INTO employee_amount_balances (employee_id, ordinal_no, amount)
+SELECT employee_id, ordinal_no,
+       trunc(amount_raw) + ((amount_raw - trunc(amount_raw)) * 100) / 60.0
+FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'H'
+  AND abs((amount_raw - trunc(amount_raw)) * 100) < 60
+ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
+
+-- H values whose minute part isn't a valid minute (≥ 60 — either corrupt or
+-- secretly already-decimal) → quarantine for human review, never mangled.
+INSERT INTO migration.amount_quarantine (tenant, legacy_empno, code, codetype, amount_minor, reason, loaded_at)
+SELECT :'tenant_schema', legacy_empno, name, codetype, amount_minor, 'h_minutes_out_of_range', :'cutover'
+FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'H'
+  AND abs((amount_raw - trunc(amount_raw)) * 100) >= 60;
 
 -- Y → YTD take-on staging (always mid-year; never dropped).
 INSERT INTO migration.ytd_takeon (tenant, employee_id, legacy_empno, code, amount_minor, loaded_at)
 SELECT :'tenant_schema', employee_id, legacy_empno, name, amount_minor, :'cutover'
 FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'Y';
 
--- Any OTHER recognised codetype (T,H,S,J,…) → deprecated (LIVE, Q-addressed).
--- NOTE ×100 truncates below 2dp: fine for J (DDMMYY ints) and S (scratch), but
--- if T/H time values carry >2dp in your data, promote them to balances instead.
+-- Any OTHER recognised codetype (S,J,…) → deprecated (dead codes only).
+-- ×100 truncation is fine here: J is a DDMMYY int (reverses exactly), S is
+-- scratch with no post-run meaning.
 INSERT INTO employee_amount_deprecated (employee_id, ordinal_no, amount_minor, codetype)
 SELECT employee_id, ordinal_no, amount_minor, codetype
 FROM _amt WHERE employee_id IS NOT NULL AND codetype IS NOT NULL
-  AND codetype NOT IN ('E','D','C','Y','B')
+  AND codetype NOT IN ('E','D','C','Y','B','T','H')
 ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
 
 -- Codetype not found (no catalogue row for the ordinal) → quarantine (an error).
