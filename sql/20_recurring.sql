@@ -11,13 +11,16 @@
 --                                                   owed/taken, carry-forwards,
 --                                                   basic rate per currency —
 --                                                   RAW 4dp, no ×100)
---   codetype T → employee_amount_balances          (IMPORTED AS ZERO — see below)
---   codetype H → employee_amount_deprecated        (IMPORTED AS ZERO — see below)
---     Hours are stale by definition at import time: we import after a run and
---     before new hours are captured/clocked into legacy, so carrying captured
---     values would double or misapply them. The slots come across zeroed.
---     Owner rule: the php system always populates T (decimal) and IGNORES H
---     (HH:mm) — H is legacy-only and phases out on deprecated.
+--   codetype T → employee_amount_balances          (RAW — no assumptions about
+--                                                   what a T slot holds)
+--   codetype H → employee_amount_deprecated        (RAW HH:mm, NOT converted —
+--                                                   conversion would mean
+--                                                   retyping H→T; instead the
+--                                                   user eyeballs deprecated
+--                                                   and fixes per new-system
+--                                                   rules)
+--     Owner rule: the php system always populates T (decimal) and never
+--     writes H — H phases out on deprecated.
 --   codetype Y → migration.ytd_takeon              (mid-year YTD take-on staging
 --                                                   → cumulative_ledger, see
 --                                                   FOLLOW-UP below)
@@ -109,13 +112,10 @@ SELECT employee_id, ordinal_no, amount_minor
 FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'C'
 ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
 
--- B → balances (LIVE working values; RAW 4dp — rates/day counts, no ×100).
--- Per-code refinement (leave→leave_balances etc.) is a later, data-driven pass.
--- T → balances too, but ZEROED: captured hours are stale post-run (header note).
--- The row still comes across so the slot sheet shows the T slots as present.
+-- B + T → balances (LIVE working values; RAW 4dp — no ×100, no assumptions
+-- about slot contents). Per-code refinement is a later, data-driven pass.
 INSERT INTO employee_amount_balances (employee_id, ordinal_no, amount)
-SELECT employee_id, ordinal_no,
-       CASE WHEN codetype = 'T' THEN 0 ELSE amount_raw END
+SELECT employee_id, ordinal_no, amount_raw
 FROM _amt WHERE employee_id IS NOT NULL AND codetype IN ('B', 'T')
 ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
 
@@ -124,13 +124,10 @@ INSERT INTO migration.ytd_takeon (tenant, employee_id, legacy_empno, code, amoun
 SELECT :'tenant_schema', employee_id, legacy_empno, name, amount_minor, :'cutover'
 FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'Y';
 
--- Any OTHER recognised codetype (H,S,J,…) → deprecated. H is ZEROED (stale
--- hours, header note) and phases out here — the php system never writes H.
--- ×100 truncation is fine for the rest: J is a DDMMYY int (reverses exactly),
--- S is scratch with no post-run meaning.
+-- Any OTHER recognised codetype (H,S,J,…) → deprecated, RAW. ×100 reverses
+-- exactly for 2dp values: H HH:mm (12.45→1245), J DDMMYY ints, S scratch.
 INSERT INTO employee_amount_deprecated (employee_id, ordinal_no, amount_minor, codetype)
-SELECT employee_id, ordinal_no,
-       CASE WHEN codetype = 'H' THEN 0 ELSE amount_minor END, codetype
+SELECT employee_id, ordinal_no, amount_minor, codetype
 FROM _amt WHERE employee_id IS NOT NULL AND codetype IS NOT NULL
   AND codetype NOT IN ('E','D','C','Y','B','T')
 ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
