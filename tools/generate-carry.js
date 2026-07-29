@@ -8,6 +8,18 @@ const inv = require('./inventory.json');
 const OUT = path.join(__dirname, 'out');
 fs.mkdirSync(OUT, { recursive: true });
 
+// Optional: actual desktop columns (source-columns.csv from information_schema).
+// When present, dictionary columns ABSENT on the desktop are imported as NULL
+// (:payroll_number for a missing 'payroll' column) instead of failing the run.
+let actualCols = null;
+try {
+  const rows = fs.readFileSync(path.join(__dirname, 'source-columns.csv'), 'utf8')
+    .split(/\r?\n/).filter(Boolean).map(l => l.split(','));
+  actualCols = {};
+  for (const [, table, col] of rows) (actualCols[table] ??= new Set()).add(col);
+  console.log('source-columns.csv loaded: drift-aware import generation');
+} catch { console.log('no source-columns.csv: assuming desktop matches dictionary'); }
+
 // ---------------------------------------------------------------- classification
 // Already present in pipro (employees + the generic-slot store + accounts widen).
 const SKIP = new Set([
@@ -40,6 +52,10 @@ const NEIGHBOUR = new Set([
   'settings_tax_certificate_bwa_calcs',
   'settings_tax_certificate_lso_lesotho', 'settings_tax_certificate_lso_calcs',
 ]);
+
+// Dictionary corrections found on live data (fix DataDictionary.java too):
+// ReportSection holds section letters 'A'/'B', not a boolean.
+const TYPE_OVERRIDES = { 'pay_run_tax_audit.reportsection': 'TEXT' };
 
 const TYPE_DDL = {
   BOOLEAN: 'BOOLEAN', TINYINT: 'SMALLINT', SMALLINT: 'SMALLINT',
@@ -104,7 +120,8 @@ function tableDdl(t) {
       continue;
     }
     const notNull = c.keyPos > 0 && !hasAuto ? ' NOT NULL' : '';
-    lines.push(`    ${name.padEnd(14)} ${TYPE_DDL[c.type]}${notNull}`);
+    const ddlType = TYPE_OVERRIDES[`${t.name}.${c.name}`] ?? TYPE_DDL[c.type];
+    lines.push(`    ${name.padEnd(14)} ${ddlType}${notNull}`);
     if (c.keyPos > 0 && !hasAuto) keyCols.push(name);
     stats.columns++;
   }
@@ -151,6 +168,7 @@ function importSql(t, schemaVar) {
     selCols.push(`:payroll_number`);
     if (!hasAuto) keyCols.push('payroll');
   }
+  const onDesktop = (col) => !actualCols || !actualCols[t.name] || actualCols[t.name].has(col);
   for (const c of t.columns) {
     const tgt = targetCol(c);
     tgtCols.push(tgt);
@@ -159,6 +177,10 @@ function importSql(t, schemaVar) {
       continue;
     }
     if (tgt === 'employee_id') { selCols.push('e.user_id'); }
+    else if (!onDesktop(c.name)) {
+      // dictionary promises this column; the desktop never grew it
+      selCols.push(c.name === 'payroll' ? ':payroll_number' : 'NULL');
+    }
     else selCols.push(`s.${c.name}`);
     if (c.keyPos > 0 && !hasAuto) keyCols.push(tgt);
   }

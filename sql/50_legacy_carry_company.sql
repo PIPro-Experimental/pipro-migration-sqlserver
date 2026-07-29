@@ -25,7 +25,7 @@ ON CONFLICT (transfer_no, record_type, ordinal_no) DO NOTHING;
 
 -- ---- settings_currency ----
 INSERT INTO settings_currency (payroll, country_code, currency_code1, currency_code2, currency_exchange, currency_exchange_buy, currency_exchange_sell, tax_currency_code)
-SELECT s.payroll, s.country_code, s.currency_code1, s.currency_code2, s.currency_exchange, s.currency_exchange_buy, s.currency_exchange_sell, s.tax_currency_code
+SELECT s.payroll, s.country_code, s.currency_code1, s.currency_code2, s.currency_exchange, NULL, NULL, s.tax_currency_code
 FROM :"legacy_company_schema".settings_currency s
 ON CONFLICT (payroll) DO NOTHING;
 
@@ -126,49 +126,49 @@ ON CONFLICT (payroll, report_no, break_set, ordinal_no) DO NOTHING;
 
 -- ---- settings_report_calcs ----
 INSERT INTO settings_report_calcs (payroll, report_no, ordinal_no, calc_time, ind_no, ind_val, op1_a, op1_n, op2_a, op2_n, op3_a, op3_n, op_code)
-SELECT s.payroll, s.reportno, s.ordinalno, s.calctime, s.indno, s.indval, s.op1a, s.op1n, s.op2a, s.op2n, s.op3a, s.op3n, s.opcode
+SELECT :payroll_number, s.reportno, s.ordinalno, s.calctime, s.indno, s.indval, s.op1a, s.op1n, s.op2a, s.op2n, s.op3a, s.op3n, s.opcode
 FROM :"legacy_company_schema".settings_report_calcs s
 ON CONFLICT (payroll, report_no, ordinal_no) DO NOTHING;
 
 -- ---- settings_report_details ----
 INSERT INTO settings_report_details (payroll, report_no, ordinal_no, alt_descr, description, edit_option, extract_as_credit, extract_line_split, extract_to_file, length, line_no, literal, op_a, op_n, print_pos, rep_literal, signed, suppress_if_blank, total, total_id)
-SELECT s.payroll, s.reportno, s.ordinalno, s.altdescr, s.description, s.editoption, s.extractascredit, s.extractlinesplit, s.extracttofile, s.length, s.lineno, s.literal, s.opa, s.opn, s.printpos, s.repliteral, s.signed, s.suppressifblank, s.total, s.totalid
+SELECT :payroll_number, s.reportno, s.ordinalno, s.altdescr, s.description, s.editoption, s.extractascredit, s.extractlinesplit, s.extracttofile, s.length, s.lineno, s.literal, s.opa, s.opn, s.printpos, s.repliteral, s.signed, s.suppressifblank, s.total, s.totalid
 FROM :"legacy_company_schema".settings_report_details s
 ON CONFLICT (payroll, report_no, ordinal_no) DO NOTHING;
 
 -- ---- settings_report_headings ----
 INSERT INTO settings_report_headings (payroll, report_no, ordinal_no, extract_to_file, heading, length, line_no, print_pos, rep_literal)
-SELECT s.payroll, s.reportno, s.ordinalno, s.extracttofile, s.heading, s.length, s.lineno, s.printpos, s.repliteral
+SELECT :payroll_number, s.reportno, s.ordinalno, s.extracttofile, s.heading, s.length, s.lineno, s.printpos, s.repliteral
 FROM :"legacy_company_schema".settings_report_headings s
 ON CONFLICT (payroll, report_no, ordinal_no) DO NOTHING;
 
 -- ---- settings_report_history ----
 INSERT INTO settings_report_history (payroll, report_no, ordinal_no, description)
-SELECT s.payroll, s.reportno, s.ordinalno, s.description
+SELECT :payroll_number, s.reportno, s.ordinalno, s.description
 FROM :"legacy_company_schema".settings_report_history s
 ON CONFLICT (payroll, report_no, ordinal_no) DO NOTHING;
 
 -- ---- settings_report_variables ----
 INSERT INTO settings_report_variables (payroll, template_no, link_ord_no, var_type, description, line_no, opa, op_n, text_value)
-SELECT s.payroll, s.templateno, s.linkordno, s.vartype, s.description, s.lineno, s.opa, s.opn, s.textvalue
+SELECT :payroll_number, s.templateno, s.linkordno, s.vartype, s.description, s.lineno, s.opa, s.opn, s.textvalue
 FROM :"legacy_company_schema".settings_report_variables s
 ON CONFLICT (payroll, template_no, link_ord_no, var_type) DO NOTHING;
 
 -- ---- settings_report_totald ----
 INSERT INTO settings_report_totald (payroll, report_no, ordinal_no, description)
-SELECT s.payroll, s.reportno, s.ordinalno, s.description
+SELECT :payroll_number, s.reportno, s.ordinalno, s.description
 FROM :"legacy_company_schema".settings_report_totald s
 ON CONFLICT (payroll, report_no, ordinal_no) DO NOTHING;
 
 -- ---- settings_report_totals ----
 INSERT INTO settings_report_totals (payroll, report_no, ordinal_no, alt_descr, break_legend, break_val, edit_option, extract_as_credit, extract_line_split, extract_to_file, length, line_no, literal, print_pos, rep_literal, signed, total_id)
-SELECT s.payroll, s.reportno, s.ordinalno, s.altdescr, s.breaklegend, s.breakval, s.editoption, s.extractascredit, s.extractlinesplit, s.extracttofile, s.length, s.lineno, s.literal, s.printpos, s.repliteral, s.signed, s.totalid
+SELECT :payroll_number, s.reportno, s.ordinalno, s.altdescr, s.breaklegend, s.breakval, s.editoption, s.extractascredit, s.extractlinesplit, s.extracttofile, s.length, s.lineno, s.literal, s.printpos, s.repliteral, s.signed, s.totalid
 FROM :"legacy_company_schema".settings_report_totals s
 ON CONFLICT (payroll, report_no, ordinal_no) DO NOTHING;
 
 -- ---- settings_report_storage ----
 INSERT INTO settings_report_storage (payroll, report_no, ordinal_no, data_type, default_value, description)
-SELECT s.payroll, s.reportno, s.ordinalno, s.datatype, s.defaultvalue, s.description
+SELECT :payroll_number, s.reportno, s.ordinalno, s.datatype, s.defaultvalue, s.description
 FROM :"legacy_company_schema".settings_report_storage s
 ON CONFLICT (payroll, report_no, ordinal_no) DO NOTHING;
 

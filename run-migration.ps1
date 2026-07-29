@@ -1,11 +1,11 @@
 <#
-    run-migration.ps1 — hop 2 driver. Loads the migration_map, then runs
+    run-migration.ps1 - hop 2 driver. Loads the migration_map, then runs
     sql/10_employees.sql once per tenant with the right search_path + variables.
 
     PREREQUISITES (see README):
       1. Docker stack up; tenants provisioned via the app (tenant_<slug> exists,
          pipro_core_tenants populated).
-      2. Legacy tables dumped into the docker DB as schemas (e.g. legacy_acme) —
+      2. Legacy tables dumped into the docker DB as schemas (e.g. legacy_acme) -
          option (b). This script assumes single-DB (source + target both in docker).
 
     Usage:
@@ -21,7 +21,9 @@ $here = $PSScriptRoot
 $PG   = @('exec','-i','-e','PGPASSWORD=pipro-dev-only','pipro-postgres','psql','-U','pipro','-d','pipro')
 
 # --- Docker preflight (do NOT auto-launch; the user starts it manually) --------
-docker info 2>$null | Out-Null
+# cmd wrapper: PS 5.1 turns native stderr (e.g. docker WARNINGs) into
+# NativeCommandError under -ErrorActionPreference Stop; cmd swallows it.
+cmd /c "docker info >nul 2>&1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "`n==> Docker is not running. Start Docker Desktop, wait for 'Engine running', then re-run.`n" -ForegroundColor Yellow
     exit 1
@@ -38,9 +40,9 @@ $raw = docker exec -e PGPASSWORD=pipro-dev-only pipro-postgres psql -U pipro -d 
 if ($LASTEXITCODE -ne 0) { Write-Host "==> Could not read migration_map." -ForegroundColor Red; exit 1 }
 
 $rows = $raw -split "`n" | Where-Object { $_ -match '\|' }
-if (-not $rows) { Write-Host "==> migration_map is empty — edit sql/00_migration_map.sql." -ForegroundColor Yellow; exit 1 }
+if (-not $rows) { Write-Host "==> migration_map is empty - edit sql/00_migration_map.sql." -ForegroundColor Yellow; exit 1 }
 
-# --- Populate each tenant (10 core → 20 recurring → slots → legacy carry) -------
+# --- Populate each tenant (10 core -> 20 recurring -> slots -> legacy carry) -------
 $scripts = @('sql/10_employees.sql', 'sql/20_recurring.sql', 'sql/40_employee_slots.sql',
              'sql/50_legacy_carry_company.sql', 'sql/55_legacy_carry_payroll.sql',
              'sql/60_employee_accounts.sql') | ForEach-Object { Join-Path $here $_ }

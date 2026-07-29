@@ -1,0 +1,897 @@
+{
+ "missingTables": [],
+ "report": [
+  {
+   "table": "settings_bank_transfer",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_bank_transfer_value",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_currency",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [
+    "currency_exchange_buy",
+    "currency_exchange_sell"
+   ],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_user",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_global",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_taxcodes_cod_congo",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_taxcodes_gha_ghana",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_taxcodes_ken_kenya",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_user_mli_mali",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_taxcodes_mus_mauritius",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_user_nam_namibia",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_taxcodes_nam_namibia",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_taxcodes_swz_eswatini",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_user_tax",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_taxcodes",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_user_zaf_southafrica",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_taxcodes_zwe_zimbabwe",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employees",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "dischargedtaxrecalculate",
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_employee_amounts",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employee_amounts",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_employee_dates",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employee_dates",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_payroll_dates",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_employee_precision_amounts",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employee_precision_amounts",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_payroll_precision_amounts",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employee_increments",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employee_accounts",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_employee_alpha",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employee_alpha",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "run_history",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "run_history_amounts",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "run_history_alpha",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "run_history_accounts",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_thirdparty_codes",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_thirdparty_dedtype",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_thirdparty_agents",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_thirdparty_eft",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employee_thirdparty_payments",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employee_thirdparty_transact",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_banks",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "equity",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employment_tax_incentive",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employee_interim",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employee_interim_items",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "employee_leave_history",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "fund_mibfa",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "fund_mibfa_header",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "fund_mibfa_other",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_apso_tax",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_apso_tax_codes",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_auto_ytd",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_tax_certificate_bwa_botswana",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_tax_certificate_bwa_blocks",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_tax_certificate_bwa_calcs",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_calculations",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_calendar",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_costcode_breaks",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_costing_codes",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_costing_general",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_company_third_party",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_equity",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_exceptions",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_report",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_report_breaks",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_report_calcs",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [
+    "payroll"
+   ],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_report_details",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [
+    "payroll"
+   ],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_report_headings",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [
+    "payroll"
+   ],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_report_history",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [
+    "payroll"
+   ],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_report_variables",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [
+    "payroll"
+   ],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_report_totald",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [
+    "payroll"
+   ],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_report_totals",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [
+    "payroll"
+   ],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_report_storage",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [
+    "payroll"
+   ],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_holidays",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_leave_details",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_leave_history_report",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_leave_history_report_breaks",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_leave_history_report_type",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_tax_certificate_lso_lesotho",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_tax_certificate_lso_calcs",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_payslip",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_payslip_amounts",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_payslip_descript",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_payslip_message",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_payslip_user",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_rolling_history",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_rolling_hist_fields",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_special_runs",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_split_payment_code",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_tax_certificate_swz_calcs",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_tax_certificate_swz_header",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_tax_certificate_swz_eswatini",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_table_access",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_table_values",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_zaf_uif_calcs",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_zaf_uif",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_zaf_uif_company",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_zaf_uif_file",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_zaf_uif_file_sort",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_fund_coida",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "pay_run_messages",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "pay_run_tax_audit",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "ratef",
+   "schemaType": "PAYROLL",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_zaf_sars_company_values",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_zaf_sars_company",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_zaf_sars_file",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "settings_zaf_sars_file_sort",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "zaf_sars_print",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  },
+  {
+   "table": "zaf_sars_work",
+   "schemaType": "COMPANY",
+   "missing_on_desktop": [],
+   "extra_on_desktop": [
+    "updated_on"
+   ]
+  }
+ ]
+}

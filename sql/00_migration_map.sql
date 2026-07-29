@@ -23,7 +23,8 @@ CREATE TABLE migration_map (
                                              -- that had none (55_legacy_carry)
 );
 
--- DECISION: seed your real mapping (tenant_slug must be a provisioned tenant).
+-- Live mapping (verified 2026-07-23: interim payroll number = 1 everywhere,
+-- single currency slot, basiccode = 1; tenant + payroll 1 provisioned).
 INSERT INTO migration_map (legacy_company_schema, legacy_payroll_schema, tenant_slug, target_payroll_id, legacy_payroll_number) VALUES
-    ('airplane', 'pipro', 'airplane', 1, 1)
+    ('airplane', 'pipro', 'test_airplane', 1, 1)
 ON CONFLICT (legacy_company_schema) DO NOTHING;
