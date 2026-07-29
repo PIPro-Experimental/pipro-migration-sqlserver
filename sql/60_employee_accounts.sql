@@ -7,7 +7,7 @@
 -- destinations per employee with split-pay routing. ordinal_no carries the
 -- slot number; the bitemporal columns are stamped with :cutover.
 --
--- Runner variables: :legacy_schema :tenant_schema :cutover :system_user_id
+-- Runner variables: :legacy_company_schema :tenant_schema :cutover :system_user_id
 --
 -- CONFIRM: account_type receives the RAW legacy DestinAccountType code (the
 --          CHECK was dropped for exactly this); mapping raw codes to
@@ -39,11 +39,11 @@ SELECT
     CASE WHEN s.sarsbankaccount_g8 THEN 1 ELSE 0 END,
     s.accountiban_g9,
     :'cutover', :'cutover', :system_user_id
-FROM :"legacy_schema".employee_accounts s
+FROM :"legacy_company_schema".employee_accounts s
 JOIN employees e ON e.id = 'emp-' || s.employeeno::text
 WHERE NOT EXISTS (                                          -- idempotency: skip already-carried slots
     SELECT 1 FROM employee_bank_details b
      WHERE b.employee_id = e.user_id AND b.ordinal_no = s.ordinalno);
 
 COMMIT;
-\echo 'Done (employee accounts -> bank details):' :tenant_schema '<-' :legacy_schema
+\echo 'Done (employee accounts -> bank details):' :tenant_schema '<-' :legacy_company_schema

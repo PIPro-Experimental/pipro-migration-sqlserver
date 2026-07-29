@@ -34,7 +34,7 @@ if ($LASTEXITCODE -ne 0) { Write-Host "==> Failed to load migration_map." -Foreg
 
 # --- Read the map rows ----------------------------------------------------------
 $raw = docker exec -e PGPASSWORD=pipro-dev-only pipro-postgres psql -U pipro -d pipro -t -A -F '|' `
-        -c "SELECT legacy_schema, tenant_slug, target_payroll_id, legacy_payroll_number FROM migration_map ORDER BY legacy_schema"
+        -c "SELECT legacy_company_schema, legacy_payroll_schema, tenant_slug, target_payroll_id, legacy_payroll_number FROM migration_map ORDER BY legacy_company_schema"
 if ($LASTEXITCODE -ne 0) { Write-Host "==> Could not read migration_map." -ForegroundColor Red; exit 1 }
 
 $rows = $raw -split "`n" | Where-Object { $_ -match '\|' }
@@ -46,12 +46,13 @@ $scripts = @('sql/10_employees.sql', 'sql/20_recurring.sql', 'sql/40_employee_sl
              'sql/60_employee_accounts.sql') | ForEach-Object { Join-Path $here $_ }
 foreach ($row in $rows) {
     $c = $row.Split('|')
-    $legacy = $c[0]; $slug = $c[1]; $payrollId = $c[2]; $payrollNumber = $c[3]
+    $legacyCompany = $c[0]; $legacyPayroll = $c[1]; $slug = $c[2]; $payrollId = $c[3]; $payrollNumber = $c[4]
     $tenant = "tenant_$slug"
-    Write-Host "==> $legacy  ->  $tenant  (payroll $payrollId)" -ForegroundColor Cyan
+    Write-Host "==> $legacyCompany + $legacyPayroll  ->  $tenant  (payroll $payrollId)" -ForegroundColor Cyan
     foreach ($script in $scripts) {
         Get-Content $script -Raw | docker @PG `
-            -v ("legacy_schema=" + $legacy) `
+            -v ("legacy_company_schema=" + $legacyCompany) `
+            -v ("legacy_payroll_schema=" + $legacyPayroll) `
             -v ("tenant_schema=" + $tenant) `
             -v ("target_payroll_id=" + $payrollId) `
             -v ("payroll_number=" + $payrollNumber) `

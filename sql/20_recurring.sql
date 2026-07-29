@@ -36,7 +36,7 @@
 -- (EmployeeNo, OrdinalNo); the code name + codetype come from the catalogue,
 -- joined on OrdinalNo.
 --
--- Runner variables: :legacy_schema :tenant_schema :cutover :system_user_id
+-- Runner variables: :legacy_company_schema :tenant_schema :cutover :system_user_id
 --
 -- FOLLOW-UP: materialise migration.ytd_takeon → cumulative_ledger/payslip_fact
 -- (needs the legacy-Y-code → aggregate-code map + per-period vs opening-balance
@@ -67,7 +67,7 @@ SELECT
     CASE WHEN s.manualdisplayind THEN 1 ELSE 0 END,
     CASE WHEN s.prorataind       THEN 1 ELSE 0 END,
     CASE WHEN s.qmfdisplayind    THEN 1 ELSE 0 END
-FROM :"legacy_schema".settings_employee_amounts s
+FROM :"legacy_company_schema".settings_employee_amounts s
 ON CONFLICT (ordinal_no) DO NOTHING;
 
 -- ---- Stage the per-employee amounts (join catalogue on OrdinalNo) -----------
@@ -81,8 +81,8 @@ SELECT
     (a.amount_q * 100)::bigint        AS amount_minor,     -- ×100 major→minor
     a.amount_q                        AS amount_raw,       -- full 4dp (balances route)
     upper(nullif(s.codetype, ''))     AS codetype
-FROM :"legacy_schema".employee_amounts a
-LEFT JOIN :"legacy_schema".settings_employee_amounts s ON s.ordinalno = a.ordinalno
+FROM :"legacy_company_schema".employee_amounts a
+LEFT JOIN :"legacy_company_schema".settings_employee_amounts s ON s.ordinalno = a.ordinalno
 LEFT JOIN employees e ON e.id = 'emp-' || a.employeeno::text
 WHERE a.amount_q <> 0;
 

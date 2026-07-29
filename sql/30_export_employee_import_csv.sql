@@ -9,7 +9,7 @@
 -- legacy_<schema>). Pipe STDOUT to a file, then upload it via the import UI /
 -- endpoint (csv format):
 --
---   psql ... -v legacy_schema=legacy_acme -f 30_export_employee_import_csv.sql > acme_employees.csv
+--   psql ... -v legacy_company_schema=legacy_acme -f 30_export_employee_import_csv.sql > acme_employees.csv
 --
 -- ---------------------------------------------------------------------------
 -- SCOPE — the importer models the COMMON case, NOT every legacy amount line.
@@ -45,12 +45,12 @@ COPY (
         -- + medical_scheme_name, medical_dependants, and the address / bank /
         --   tax-status / phone / next-of-kin / loan columns — add once you've
         --   pulled their exact keys from the import template.
-    FROM :"legacy_schema".employees e
-    LEFT JOIN :"legacy_schema".employee_amounts bas  ON bas.employeeno  = e.employeeno AND bas.code  = 'BASIC'    -- CHOOSE codes ↓
-    LEFT JOIN :"legacy_schema".employee_amounts trav ON trav.employeeno = e.employeeno AND trav.code = 'TRAVEL'
-    LEFT JOIN :"legacy_schema".employee_amounts hous ON hous.employeeno = e.employeeno AND hous.code = 'HOUSING'
-    LEFT JOIN :"legacy_schema".employee_amounts cell ON cell.employeeno = e.employeeno AND cell.code = 'CELL'
-    LEFT JOIN :"legacy_schema".employee_amounts ret  ON ret.employeeno  = e.employeeno AND ret.code  = 'RA'
-    LEFT JOIN :"legacy_schema".employee_amounts medd ON medd.employeeno = e.employeeno AND medd.code = 'MEDICAL'
+    FROM :"legacy_company_schema".employees e
+    LEFT JOIN :"legacy_company_schema".employee_amounts bas  ON bas.employeeno  = e.employeeno AND bas.code  = 'BASIC'    -- CHOOSE codes ↓
+    LEFT JOIN :"legacy_company_schema".employee_amounts trav ON trav.employeeno = e.employeeno AND trav.code = 'TRAVEL'
+    LEFT JOIN :"legacy_company_schema".employee_amounts hous ON hous.employeeno = e.employeeno AND hous.code = 'HOUSING'
+    LEFT JOIN :"legacy_company_schema".employee_amounts cell ON cell.employeeno = e.employeeno AND cell.code = 'CELL'
+    LEFT JOIN :"legacy_company_schema".employee_amounts ret  ON ret.employeeno  = e.employeeno AND ret.code  = 'RA'
+    LEFT JOIN :"legacy_company_schema".employee_amounts medd ON medd.employeeno = e.employeeno AND medd.code = 'MEDICAL'
     ORDER BY e.employeeno
 ) TO STDOUT WITH (FORMAT csv, HEADER true);

@@ -5,7 +5,8 @@
 --                    → employee_payroll_assignments  (puts them in the run worklist)
 --                    → employee_status_history        (payable gate)
 --
--- Runner variables: :legacy_schema :tenant_schema :target_payroll_id
+-- Runner variables: :legacy_company_schema :legacy_payroll_schema
+--                   :tenant_schema :target_payroll_id
 --                   :cutover :system_user_id     (see run-migration.ps1)
 --
 -- Target columns/types are VERBATIM from the live schema (real). Source column
@@ -55,11 +56,11 @@ SELECT
 -- 55_legacy_carry_payroll.sql, so that addressing keeps working in pipro.
 -- What we copy here is only the CONVENIENCE single default-currency rate for
 -- employees.salary_current_minor / the employee_contract row.
-FROM :"legacy_schema".employees e
-LEFT JOIN :"legacy_schema".settings_taxcodes t
+FROM :"legacy_company_schema".employees e
+LEFT JOIN :"legacy_payroll_schema".settings_taxcodes t
        ON t.payroll = e.payroll_f04
       AND t.currency = 1                             -- CHOOSE: default-currency slot for the convenience copy
-LEFT JOIN :"legacy_schema".employee_amounts a
+LEFT JOIN :"legacy_company_schema".employee_amounts a
        ON a.employeeno = e.employeeno
       AND a.ordinalno = t.basiccode;
 
@@ -156,8 +157,8 @@ WHERE k.eff IS NOT NULL;   -- the 'terminated' row only when a discharge date ex
 -- CHOOSE: needs the legacy reports-to EmpNo column; stubbed.
 -- ---------------------------------------------------------------------------
 -- UPDATE employees c SET manager_id = 'emp-' || src.managerempno
--- FROM :"legacy_schema".employees src
+-- FROM :"legacy_company_schema".employees src
 -- WHERE src.employeeno::text = substring(c.id from 5);
 
 COMMIT;
-\echo 'Done (core):' :tenant_schema '<-' :legacy_schema
+\echo 'Done (core):' :tenant_schema '<-' :legacy_company_schema
