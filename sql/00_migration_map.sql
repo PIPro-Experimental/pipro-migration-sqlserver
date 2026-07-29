@@ -7,9 +7,12 @@
 -- schemas -> one pipro tenant + payroll.
 --
 -- Assumes option (b) from the README: the interim schemas were dumped into
--- the docker DB under their own names (pg_dump -n airplane -n pipro |
--- restore), so hop 2 is a single-DB script. Neither name collides with the
--- target layout (public + tenant_<slug>).
+-- the docker DB, THEN the payroll one RENAMED to legacy_pipro. HARD LESSON
+-- (2026-07-29): a schema named "pipro" shadows public for the app's database
+-- USER "pipro" — postgres resolves unqualified names via search_path
+-- "$user", public — and the app promptly rebuilt seed copies of its system
+-- tables inside it, "losing" every real user/tenant row behind the shadow.
+-- NEVER restore a schema whose name equals a database user name.
 -- ===========================================================================
 
 DROP TABLE IF EXISTS migration_map;
@@ -23,8 +26,8 @@ CREATE TABLE migration_map (
                                              -- that had none (55_legacy_carry)
 );
 
--- Live mapping (verified 2026-07-23: interim payroll number = 1 everywhere,
--- single currency slot, basiccode = 1; tenant + payroll 1 provisioned).
+-- Live mapping (verified: interim payroll number = 1 everywhere, single
+-- currency slot, basiccode = 1; tenant + payroll 1 provisioned).
 INSERT INTO migration_map (legacy_company_schema, legacy_payroll_schema, tenant_slug, target_payroll_id, legacy_payroll_number) VALUES
-    ('airplane', 'pipro', 'test_airplane', 1, 1)
+    ('airplane', 'legacy_pipro', 'test_airplane', 1, 1)
 ON CONFLICT (legacy_company_schema) DO NOTHING;
