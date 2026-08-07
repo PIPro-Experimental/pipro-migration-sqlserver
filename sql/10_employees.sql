@@ -47,22 +47,18 @@ SELECT
     1                                                  AS currency,
     upper(nullif(e.taxcountrycode_f14, ''))::char(3) AS nationality_country_code, -- there are two sets of country codes, one char(2) & one char(3)
     CASE upper(left(coalesce(e.gender_f22,''),1)) WHEN 'M' THEN 'male' WHEN 'F' THEN 'female' ELSE 'unspecified' END AS gender,
-    COALESCE(NULLIF(e.emailaddress_f40, ''), e.employeeid_f01::text || '@migrated.invalid') AS email,        -- synthesise when F40 blank
-    (COALESCE(a.amount_q, 0) * 100)::bigint          AS rate_minor
--- Basic rate (owner decision 2026-07-23): the AUTHORITATIVE basic rate lives in
--- the Q-bank (employee_amounts, imported whole by 20_recurring) and is addressed
--- via settings_taxcodes.basic_code — the calc doesn't know it's "basic rate",
--- it just reads (Q, basic_code, currency). settings_taxcodes is imported by
--- 55_legacy_carry_payroll.sql, so that addressing keeps working in pipro.
--- What we copy here is only the CONVENIENCE single default-currency rate for
--- employees.salary_current_minor / the employee_contract row.
-FROM :"legacy_company_schema".employees e
-LEFT JOIN :"legacy_payroll_schema".settings_taxcodes t
-       ON t.payroll = e.payroll_f04
-      AND t.currency = 1                             -- CHOOSE: default-currency slot for the convenience copy
-LEFT JOIN :"legacy_company_schema".employee_amounts a
-       ON a.employeeno = e.employeeno
-      AND a.ordinalno = t.basiccode;
+    COALESCE(NULLIF(e.emailaddress_f40, ''), e.employeeid_f01::text || '@migrated.invalid') AS email         -- synthesise when F40 blank
+-- Basic rate (owner correction 2026-08-01, learned the hard way on the first
+-- live comparison): the basiccode ordinal is a CALC INPUT (this client's is a
+-- user-named annual "raise lever"), NOT period pay — mapping it to the
+-- contract rate inflated every payslip ~13x. Period pay is the E-codes,
+-- which 20_recurring imports as recurring earnings and which reproduce the
+-- legacy gross EXACTLY (verified 169/170). So: contracts are created at
+-- rate 0 (employment record only), pay flows from the imported lines, the
+-- raise-lever value stays Q-addressed for the calcs, and
+-- employees.salary_current_minor is set by 20_recurring from the routed
+-- earnings (standing monthly gross).
+FROM :"legacy_company_schema".employees e;
 
 -- ---------------------------------------------------------------------------
 -- Step 2: pipro_core_users (public) — MINT one login-user per employee and
@@ -101,7 +97,7 @@ INSERT INTO employees (
     occupation, category)
 SELECT
     'emp-' || s.legacy_empno, m.user_id, s.employee_code, s.first_name, s.last_name,
-    s.email, s.id_number, s.hired_at, s.terminated_at, s.rate_minor, s.currency,
+    s.email, s.id_number, s.hired_at, s.terminated_at, 0, s.currency,   -- salary display set by 20_recurring
     :'cutover', s.date_of_birth, s.gender, s.title, s.nationality_country_code,
     s.marital_status, NULL, s.occupation, s.category
 FROM _src s JOIN _idmap m ON m.legacy_empno = s.legacy_empno
@@ -109,14 +105,14 @@ ON CONFLICT (employee_code) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- Step 4: employee_contracts — bitemporal fan-out. One current monthly
--- contract; id is manual MAX+1 (BIGINT, no IDENTITY); rate_minor CHECK (> 0).
+-- contract; id is manual MAX+1 (BIGINT, no IDENTITY); rate 0 = employment record.
 -- ---------------------------------------------------------------------------
 INSERT INTO employee_contracts (
     id, employee_id, rate_type, rate_minor, currency, hours_per_week,
     org_unit_id, effective_from, recorded_at, created_by_user_id)
 SELECT
     COALESCE((SELECT max(id) FROM employee_contracts), 0) + row_number() OVER (ORDER BY m.user_id),
-    m.user_id, 'monthly', s.rate_minor, s.currency,
+    m.user_id, 'monthly', 0, s.currency,       -- rate 0: pay flows from imported lines
     40.00,              -- CHOOSE: hours_per_week
     NULL,               -- CHOOSE: org_unit_id (map dept → org_units(id))
     s.hired_at, :'cutover', :system_user_id

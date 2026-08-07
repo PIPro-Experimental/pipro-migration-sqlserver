@@ -132,6 +132,13 @@ FROM _amt WHERE employee_id IS NOT NULL AND codetype IS NOT NULL
   AND codetype NOT IN ('E','D','C','Y','B','T')
 ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
 
+-- Salary display: employees.salary_current_minor = standing monthly gross
+-- (the sum of routed E lines). The basiccode ordinal is a CALC INPUT (owner
+-- 2026-08-01), never a display salary — see 10_employees Step 1 note.
+UPDATE employees e SET salary_current_minor = COALESCE(
+    (SELECT sum(x.amount_minor) FROM employee_amount_earnings x WHERE x.employee_id = e.user_id), 0)
+WHERE e.id LIKE 'emp-%';
+
 -- Codetype not found (no catalogue row for the ordinal) → quarantine (an error).
 INSERT INTO migration.amount_quarantine (tenant, legacy_empno, code, codetype, amount_minor, reason, loaded_at)
 SELECT :'tenant_schema', legacy_empno, name, codetype, amount_minor, 'codetype_not_found', :'cutover'
