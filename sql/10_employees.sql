@@ -120,8 +120,10 @@ SELECT
     40.00,              -- CHOOSE: hours_per_week
     NULL,               -- CHOOSE: org_unit_id (map dept → org_units(id))
     s.hired_at, :'cutover', :system_user_id
-FROM _src s JOIN _idmap m ON m.legacy_empno = s.legacy_empno
-WHERE s.rate_minor > 0;   -- CHECK (rate_minor > 0); rateless rows get no contract
+FROM _src s JOIN _idmap m ON m.legacy_empno = s.legacy_empno;
+-- Rateless employees get a ZERO-RATE contract (hrm-core 2026_08_01_100000
+-- relaxed the CHECK): employment exists, pay comes from configured amount
+-- codes (bursary stipends etc.) — matches how legacy represented them.
 
 -- ---------------------------------------------------------------------------
 -- Step 5: employee_payroll_assignments — WITHOUT this the engine's worklist
