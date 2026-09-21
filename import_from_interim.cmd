@@ -1,23 +1,35 @@
 @echo off
 rem ===========================================================================
-rem  import_from_interim.cmd - refresh the docker copy of the interim database,
-rem  re-import the employee slots into the tenant, and run the parity report
-rem  either side of the import.
+rem  import_from_interim.cmd - IMPORT ONLY. Refreshes the docker copy of the
+rem  interim database and re-imports the employee slots into the tenant.
 rem
-rem  Each step pauses afterwards. Read the output, then press a key to go on or
-rem  Ctrl+C to abort -- nothing later depends on a step you skip by aborting.
+rem  This script WRITES. It changes exactly two things:
+rem     1. the docker '%SOURCE%' schema  - dropped and rebuilt from the desktop DB
+rem     2. the tenant's employee_alpha   - deleted and repopulated
 rem
-rem  Assumes an existing legacy snapshot named 'legacy-before' (export-legacy.ps1).
-rem  The legacy DB is unchanged by this script, so that snapshot stays valid.
+rem  It reports nothing. To see whether the data is correct afterwards, run
+rem  compare_report.cmd, which is read-only.
+rem
+rem  Each step pauses afterwards - Ctrl+C to abort. Nothing later depends on a
+rem  step you abort out of.
 rem ===========================================================================
 setlocal
 cd /d "%~dp0"
 
-set TENANT=tenant_test_airplane
-set SOURCE=airplane
-rem set DATABASE_WORD=c0sSLn5hPYUJCXMZMs0u
+if not exist "settings.local.txt" (
+    echo.
+    echo     No settings.local.txt found in this folder.
+    echo     Copy settings.example.txt to settings.local.txt and fill in your own
+    echo     database details - it is gitignored, so it stays on your machine.
+    goto :failed
+)
+for /f "usebackq eol=# tokens=1,* delims==" %%a in ("settings.local.txt") do set "%%a=%%b"
 
-set PSQL=docker exec -i -e PGPASSWORD=pipro-dev-only pipro-postgres psql -U pipro -d pipro -v ON_ERROR_STOP=on
+set TENANT=%TENANT_SCHEMA%
+set SOURCE=%INTERIM_SCHEMA%
+set PSQL=docker exec -i -e PGPASSWORD=%DOCKER_PASSWORD% %DOCKER_CONTAINER% psql -U %DOCKER_USER% -d %DOCKER_DB% -v ON_ERROR_STOP=on
+if not defined TENANT goto :nosetting
+if not defined SOURCE goto :nosetting
 
 for /f %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd"') do set CUTOVER=%%d
 if not defined CUTOVER (
@@ -27,31 +39,21 @@ if not defined CUTOVER (
 
 echo.
 echo ===========================================================================
-echo  Tenant : %TENANT%
-echo  Source : %SOURCE%   Cutover: %CUTOVER%
+echo  IMPORT   interim -^> experimental
+echo  Tenant : %TENANT%      Source: %SOURCE%      Cutover: %CUTOVER%
 echo ===========================================================================
 
-rem --- Step 0 -----------------------------------------------------------------
-echo.
-echo [0/7] Preflight - docker up, and the legacy baseline snapshot exists.
-echo.
 docker info >nul 2>&1
 if errorlevel 1 (
     echo     Docker is not running. Start Docker Desktop and re-run.
     goto :failed
 )
-%PSQL% -c "SELECT snap, system, phase, taken_at FROM compare.snapshot ORDER BY system, phase;"
-if errorlevel 1 goto :failed
-echo.
-echo     'legacy-before' must be listed above. If it is not, abort and run:
-echo         powershell -ExecutionPolicy Bypass -File export-legacy.ps1 -Phase before
-pause
 
 rem --- Step 1 -----------------------------------------------------------------
 echo.
-echo [1/7] Refresh the docker copy of the interim DB from the desktop Postgres.
+echo [1/3] Refresh the docker copy of the interim DB from the desktop Postgres.
 echo       PostgresImport writes to the DESKTOP db; everything here reads the
-echo       docker copy. Without this the report re-measures the OLD import.
+echo       docker copy. Without this, nothing downstream sees the new import.
 echo.
 powershell -ExecutionPolicy Bypass -File .\refresh-interim.ps1
 if errorlevel 1 goto :failed
@@ -59,98 +61,77 @@ pause
 
 rem --- Step 2 -----------------------------------------------------------------
 echo.
-echo [2/7] Rebuild the employee key map + integrity report.
-echo       PostgresImport re-mints employees.employeeno on every run, so this
-echo       MUST be rebuilt after a re-import.
+echo [2/3] Safety gate - do the tenant's employee ids still match the interim?
 echo.
-echo       CHECK SECTION 6 before continuing: it must say the coincidence holds,
-echo       with 187 matched. If it does not, the tenant's 'emp-N' ids no longer
-echo       line up with the new surrogates and step 5 would mislink employees.
-echo       Abort here if so.
+echo       PostgresImport re-mints employees.employeeno on every run. The tenant's
+echo       'emp-N' ids were built from the PREVIOUS run's surrogates, so if the new
+echo       numbering differs, step 3 would import each employee's values onto a
+echo       DIFFERENT person - silently. This counts the mismatches.
 echo.
-type sql\90_employee_map.sql | %PSQL% -v legacy_company_schema=%SOURCE% -v tenant_schema=%TENANT%
+rem The query result is written to a file and read back, rather than run inside
+rem the for/f itself: cmd splits on the '=' in "-e PGPASSWORD=..." when a command
+rem string is parsed that way, and docker ends up reading the password as the
+rem container name.
+%PSQL% -t -A -c "SELECT count(*) FROM %TENANT%.employees t JOIN %SOURCE%.employees a ON btrim(a.employeeid_f01) = btrim(t.employee_code) WHERE t.id IS DISTINCT FROM concat('emp-', a.employeeno)" > "%TEMP%\pipro-gate.txt"
 if errorlevel 1 goto :failed
+set MISALIGNED=
+for /f "usebackq delims= " %%c in ("%TEMP%\pipro-gate.txt") do set MISALIGNED=%%c
+del "%TEMP%\pipro-gate.txt" >nul 2>&1
+if not defined MISALIGNED (
+    echo     Could not run the check. Aborting rather than guessing.
+    goto :failed
+)
+if not "%MISALIGNED%"=="0" (
+    echo.
+    echo     STOP: %MISALIGNED% employees have ids that no longer match the interim
+    echo     surrogates. Importing now would cross-link people. The tenant needs
+    echo     rebuilding from scratch instead - do not continue.
+    goto :failed
+)
+echo     OK - 0 misaligned. The tenant and the refreshed interim agree.
 pause
 
 rem --- Step 3 -----------------------------------------------------------------
 echo.
-echo [3/7] Capture the interim snapshot (pre-run state).
-echo.
-type sql\91_employee_snapshot.sql | %PSQL% -v system=interim -v phase=before -v snap=interim-before -v legacy_company_schema=%SOURCE% -v tenant_schema=%TENANT%
-if errorlevel 1 goto :failed
-pause
-
-rem --- Step 4 -----------------------------------------------------------------
-echo.
-echo [4/7] HOP 1 REPORT - legacy vs interim. Does the import carry every value?
-echo.
-echo       PASS = only 'match' and 'promoted' rows. The 374 'value_differs' at
-echo       ordinals 106/107 (OFFICE and SITE) should now be gone. If they are
-echo       still there, the RefNoCode fix has not taken - abort and fix the java
-echo       rather than carrying the gap forward into the tenant.
-echo.
-type sql\92_employee_diff.sql | %PSQL% -v a=legacy-before -v b=interim-before
-if errorlevel 1 goto :failed
-pause
-
-rem --- Step 5 -----------------------------------------------------------------
-echo.
 echo ===========================================================================
-echo  [5/7] DESTRUCTIVE - deletes every employee_alpha row in %TENANT%
+echo  [3/3] DESTRUCTIVE - deletes every employee_alpha row in %TENANT%
 echo        and re-imports them from the refreshed interim copy.
 echo.
 echo        Needed because 40_employee_slots inserts with ON CONFLICT DO NOTHING,
-echo        so the existing blank OFFICE/SITE rows would otherwise survive.
-echo        Only the alpha table is touched; the other tables in that script
-echo        re-run as no-ops.
+echo        so existing rows would otherwise survive unchanged. Only the alpha
+echo        table is emptied; the other tables in that script re-run as no-ops.
 echo.
 echo        NOTE: this does NOT re-run 10_employees. That script mints users with
 echo        no conflict guard, so re-running it on a populated tenant would leave
-echo        187 orphan user rows and change nothing else.
+echo        orphan user rows and change nothing else.
 echo ===========================================================================
 echo.
 set /p CONFIRM="Type YES to delete and re-import employee_alpha: "
 if /i not "%CONFIRM%"=="YES" (
-    echo     Skipped by request. Nothing was changed.
+    echo     Skipped by request. Nothing was changed in the tenant.
     goto :done
 )
 %PSQL% -c "DELETE FROM %TENANT%.employee_alpha;"
 if errorlevel 1 goto :failed
 type sql\40_employee_slots.sql | %PSQL% -v legacy_company_schema=%SOURCE% -v tenant_schema=%TENANT% -v cutover=%CUTOVER% -v system_user_id=1
 if errorlevel 1 goto :failed
-pause
-
-rem --- Step 6 -----------------------------------------------------------------
-echo.
-echo [6/7] Re-capture the experimental (pipro) snapshot.
-echo.
-type sql\91_employee_snapshot.sql | %PSQL% -v system=pipro -v phase=before -v snap=pipro-before -v legacy_company_schema=%SOURCE% -v tenant_schema=%TENANT%
-if errorlevel 1 goto :failed
-pause
-
-rem --- Step 7 -----------------------------------------------------------------
-echo.
-echo [7/7] END-TO-END REPORT - legacy vs experimental.
-echo.
-echo       TARGET: Q 17376 / V 5664 / D 948 all 'match', 563 'promoted',
-echo       nothing under 'value_differs', 'only_in_a' or 'only_in_b'.
-echo.
-type sql\92_employee_diff.sql | %PSQL% -v a=legacy-before -v b=pipro-before
-if errorlevel 1 goto :failed
 
 :done
 echo.
 echo ===========================================================================
-echo  Finished. Snapshots kept: legacy-before, interim-before, pipro-before.
+echo  Import finished. Nothing has been verified.
 echo.
-echo  AFTER the pay runs, capture the 'after' side and diff the pairs:
-echo    powershell -ExecutionPolicy Bypass -File export-legacy.ps1 -Phase after
-echo    ...then 91 with -v phase=after -v snap=pipro-after
-echo    ...then 92 with -v a=legacy-before -v b=legacy-after   (what the run touched)
-echo    ...then 92 with -v a=legacy-after  -v b=pipro-after    (run parity)
+echo  Run the read-only check next:
+echo      compare_report.cmd before
 echo ===========================================================================
 pause
 exit /b 0
+
+:nosetting
+echo.
+echo     settings.local.txt is missing TENANT_SCHEMA or INTERIM_SCHEMA.
+echo     See settings.example.txt for the full list.
+goto :failed
 
 :failed
 echo.

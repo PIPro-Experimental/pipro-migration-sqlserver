@@ -18,12 +18,23 @@
 param(
     [ValidateSet('before','after')][string]$Phase = 'before',
     [string]$Snap,
-    [string]$SqlServer = 'localhost,1433',
-    [string]$SqlDatabase = 'pipro'
+    [string]$SqlServer,
+    [string]$SqlDatabase
 )
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
 if (-not $Snap) { $Snap = "legacy-$Phase" }
+
+# Connection details from settings.local.txt; parameters override for one-off runs.
+. "$PSScriptRoot\load-settings.ps1"
+$cfg = Import-PiproSettings
+if (-not $SqlServer)   { $SqlServer   = Get-PiproSetting $cfg 'SQLSERVER' }
+if (-not $SqlDatabase) { $SqlDatabase = Get-PiproSetting $cfg 'SQLSERVER_DB' }
+
+$dockerContainer = Get-PiproSetting $cfg 'DOCKER_CONTAINER'
+$dockerDb        = Get-PiproSetting $cfg 'DOCKER_DB'
+$dockerUser      = Get-PiproSetting $cfg 'DOCKER_USER'
+$dockerPassword  = Get-PiproSetting $cfg 'DOCKER_PASSWORD'
 
 # PS 5.1 prepends a UTF-8 BOM when piping to a native process (docker/psql here),
 # and COPY reads that BOM as part of the first integer. This makes the pipe clean.
@@ -31,7 +42,7 @@ $OutputEncoding = New-Object System.Text.UTF8Encoding $false
 
 $sqlcmd = 'C:\Program Files\Microsoft SQL Server\Client SDK\ODBC\170\Tools\Binn\sqlcmd.exe'
 if (-not (Test-Path $sqlcmd)) { $sqlcmd = 'sqlcmd' }
-$PG = @('exec','-i','-e','PGPASSWORD=pipro-dev-only','pipro-postgres','psql','-U','pipro','-d','pipro')
+$PG = @('exec','-i','-e',"PGPASSWORD=$dockerPassword",$dockerContainer,'psql','-U',$dockerUser,'-d',$dockerDb)
 
 cmd /c "docker info >nul 2>&1"
 if ($LASTEXITCODE -ne 0) {
@@ -99,23 +110,22 @@ foreach ($e in $extracts) {
         exit 1
     }
 
-    # Drop blank lines and any stray separator row sqlcmd may emit. WriteAllLines
-    # (not Out-File/Set-Content) because PS 5.1 writes a UTF-8 BOM, and COPY reads
-    # the BOM as part of the first integer.
-    # sqlcmd emits a UTF-8 BOM ahead of its first row; COPY reads it as part of
-    # the first integer ("invalid input syntax for type integer"). Strip it.
+    # Drop blank lines and any stray separator row sqlcmd may emit, and strip the
+    # UTF-8 BOM sqlcmd puts ahead of its first row (COPY would read it as part of
+    # the first integer). WriteAllLines rather than Out-File/Set-Content because
+    # PS 5.1 writes a BOM of its own.
     $rows = $out | Where-Object { $_ -match '\S' -and $_ -notmatch '^-+(\|-+)*$' } `
-                 | ForEach-Object { $_ -replace "^﻿", '' }
+                 | ForEach-Object { $_ -replace "^`u{FEFF}", '' }
     [System.IO.File]::WriteAllLines($file, $rows)
     Write-Host "    $($rows.Count) rows" -ForegroundColor DarkGray
 
     # docker cp, not a stdin pipe: PS 5.1 injects a UTF-8 BOM into native-process
     # stdin regardless of $OutputEncoding, and COPY reads it as part of the first
     # integer. Copying the file in and letting psql read it locally sidesteps that.
-    cmd /c "docker cp `"$file`" pipro-postgres:/tmp/$name.psv >nul 2>&1"
+    cmd /c "docker cp `"$file`" ${dockerContainer}:/tmp/$name.psv >nul 2>&1"
     if ($LASTEXITCODE -ne 0) { Write-Host "==> docker cp failed for $name." -ForegroundColor Red; exit 1 }
 
-    docker exec -e PGPASSWORD=pipro-dev-only pipro-postgres psql -U pipro -d pipro -v ON_ERROR_STOP=on `
+    docker exec -e PGPASSWORD=$dockerPassword $dockerContainer psql -U $dockerUser -d $dockerDb -v ON_ERROR_STOP=on `
         -c "\copy $($e.Table) ($($e.Cols)) FROM '/tmp/$name.psv' WITH (FORMAT csv, DELIMITER '|', QUOTE E'\b')" | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Host "==> COPY failed for $name." -ForegroundColor Red; exit 1 }
 }

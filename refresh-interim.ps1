@@ -23,20 +23,38 @@
     DESTRUCTIVE: drops and recreates the target schema in docker. Tenant schemas are
     untouched.
 
+    Connection details live in settings.local.txt (copy settings.example.txt).
+    Parameters override the file for a one-off run.
+
     Usage:
       powershell -ExecutionPolicy Bypass -File refresh-interim.ps1
-      powershell -ExecutionPolicy Bypass -File refresh-interim.ps1 -Schema airplane -DesktopPort 5433
+      powershell -ExecutionPolicy Bypass -File refresh-interim.ps1 -Schema other_client
 #>
 param(
-    [string]$Schema       = 'airplane',
-    [string]$DesktopHost  = 'localhost',
-    [int]   $DesktopPort  = 5433,
-    [string]$DesktopDb    = 'payroll',
-    [string]$DesktopUser  = 'postgres',
-    [string]$DesktopPassword = 'c0sSLn5hPYUJCXMZMs0u',
+    [string]$Schema,
+    [string]$DesktopHost,
+    [int]   $DesktopPort,
+    [string]$DesktopDb,
+    [string]$DesktopUser,
+    [string]$DesktopPassword,
     [string]$PgDumpPath
 )
 $ErrorActionPreference = 'Stop'
+
+. "$PSScriptRoot\load-settings.ps1"
+$cfg = Import-PiproSettings
+
+if (-not $Schema)          { $Schema         = Get-PiproSetting $cfg 'INTERIM_SCHEMA' }
+if (-not $DesktopHost)     { $DesktopHost    = Get-PiproSetting $cfg 'INTERIM_HOST' }
+if (-not $DesktopPort)     { $DesktopPort    = [int](Get-PiproSetting $cfg 'INTERIM_PORT') }
+if (-not $DesktopDb)       { $DesktopDb      = Get-PiproSetting $cfg 'INTERIM_DB' }
+if (-not $DesktopUser)     { $DesktopUser    = Get-PiproSetting $cfg 'INTERIM_USER' }
+if (-not $DesktopPassword) { $DesktopPassword = Get-PiproSetting $cfg 'INTERIM_PASSWORD' -AllowEmpty }
+
+$dockerContainer = Get-PiproSetting $cfg 'DOCKER_CONTAINER'
+$dockerDb        = Get-PiproSetting $cfg 'DOCKER_DB'
+$dockerUser      = Get-PiproSetting $cfg 'DOCKER_USER'
+$dockerPassword  = Get-PiproSetting $cfg 'DOCKER_PASSWORD'
 
 # Settings emitted by a newer pg_dump that an older server will not accept.
 $incompatibleSettings = @('transaction_timeout')
@@ -92,18 +110,18 @@ finally {
 
 # --- Ship it into the container and restore ---------------------------------------
 Write-Host "==> Copying into the container ..." -ForegroundColor Cyan
-cmd /c "docker cp `"$dumpFile`" pipro-postgres:/tmp/interim.sql >nul 2>&1"
+cmd /c "docker cp `"$dumpFile`" ${dockerContainer}:/tmp/interim.sql >nul 2>&1"
 if ($LASTEXITCODE -ne 0) { Write-Host "==> docker cp failed. Nothing was changed." -ForegroundColor Red; exit 1 }
 
 $stripExpr = ($incompatibleSettings | ForEach-Object { "/^SET $_ = /d" }) -join '; '
 
 Write-Host "==> Replacing docker schema '$Schema' ..." -ForegroundColor Cyan
-docker exec pipro-postgres sh -c @"
+docker exec $dockerContainer sh -c @"
 set -e
 sed -i '$stripExpr' /tmp/interim.sql
-export PGPASSWORD=pipro-dev-only
-psql -U pipro -d pipro -v ON_ERROR_STOP=on -q -c 'DROP SCHEMA IF EXISTS $Schema CASCADE'
-psql -U pipro -d pipro -v ON_ERROR_STOP=on -q -f /tmp/interim.sql
+export PGPASSWORD=$dockerPassword
+psql -U $dockerUser -d $dockerDb -v ON_ERROR_STOP=on -q -c 'DROP SCHEMA IF EXISTS $Schema CASCADE'
+psql -U $dockerUser -d $dockerDb -v ON_ERROR_STOP=on -q -f /tmp/interim.sql
 rm -f /tmp/interim.sql
 "@
 if ($LASTEXITCODE -ne 0) {
@@ -114,11 +132,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "==> Verifying ..." -ForegroundColor Cyan
-docker exec -e PGPASSWORD=pipro-dev-only pipro-postgres psql -U pipro -d pipro `
+docker exec -e PGPASSWORD=$dockerPassword $dockerContainer psql -U $dockerUser -d $dockerDb `
     -c "SELECT '$Schema' AS schema, (SELECT count(*) FROM $Schema.employees) AS employees, (SELECT count(*) FROM $Schema.employee_alpha) AS alpha, (SELECT count(*) FROM $Schema.employee_amounts) AS amounts, (SELECT count(*) FROM $Schema.employee_alpha WHERE ordinalno IN (106,107) AND (reference_v IS NULL OR btrim(reference_v) = '')) AS blank_office_site;"
 
 Write-Host "`n==> Done. The docker copy now matches the desktop import." -ForegroundColor Green
 Write-Host "    blank_office_site should be 0 if the RefNoCode fix took." -ForegroundColor Green
 Write-Host "    NOTE: PostgresImport re-mints employees.employeeno on every run, so the" -ForegroundColor Yellow
-Write-Host "    'emp-<surrogate>' ids in an EXISTING tenant may no longer line up. Step 2" -ForegroundColor Yellow
-Write-Host "    of import_from_interim.cmd checks this - read its section 6." -ForegroundColor Yellow
+Write-Host "    'emp-<surrogate>' ids in an EXISTING tenant may no longer line up." -ForegroundColor Yellow
+Write-Host "    import_from_interim.cmd checks that automatically before it writes." -ForegroundColor Yellow

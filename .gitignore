@@ -1,3 +1,7 @@
+# Per-user connection settings: copy settings.example.txt -> settings.local.txt.
+# The example is committed; the real one holds your DB details and password.
+settings.local.txt
+
 # Local environment overrides — NEVER commit real DB credentials.
 .env
 .env.local

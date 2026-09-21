@@ -1,0 +1,43 @@
+# ===========================================================================
+#  pipro-migration-sqlserver - per-user connection settings.
+#
+#  SETUP: copy this file to  settings.local.txt  and edit the values.
+#         settings.local.txt is gitignored, so your details and password
+#         never reach the repo and you never have to edit a script.
+#
+#  Format: NAME=VALUE, one per line. Lines starting with # are ignored.
+#          Do not quote values. Trailing spaces are trimmed.
+#
+#  Every script in this folder reads this file, so there is one place to
+#  change when you move machines or work on a different client's data.
+# ===========================================================================
+
+# --- Interim: the desktop PostgreSQL that PostgresImport writes into --------
+# This is the "iteration-2" database, schema names as the java DataDictionary
+# creates them. INTERIM_SCHEMA is the company schema holding employees,
+# employee_alpha, employee_amounts and so on - it is named after the client,
+# so change it per client, not per machine.
+INTERIM_HOST=localhost
+INTERIM_PORT=5433
+INTERIM_DB=payroll
+INTERIM_USER=postgres
+INTERIM_SCHEMA=airplane
+
+# Leave INTERIM_PASSWORD blank to be prompted each run (it is never echoed).
+# Fill it in only if you would rather not retype it - this file is gitignored.
+INTERIM_PASSWORD=
+
+# --- Legacy: the SQL Server holding the live Paywell database ---------------
+# Connected with your Windows login (trusted connection), so no password here.
+SQLSERVER=localhost,1433
+SQLSERVER_DB=pipro
+
+# --- Experimental: the pipro stack running under Docker ---------------------
+# These match pipro-platform's docker-compose defaults; change them only if
+# you run the stack differently. TENANT_SCHEMA is the tenant you are migrating
+# into - tenant_<slug>, where the slug is whatever the app provisioned.
+DOCKER_CONTAINER=pipro-postgres
+DOCKER_DB=pipro
+DOCKER_USER=pipro
+DOCKER_PASSWORD=pipro-dev-only
+TENANT_SCHEMA=tenant_test_airplane
