@@ -21,7 +21,16 @@ INTERIM_HOST=localhost
 INTERIM_PORT=5433
 INTERIM_DB=payroll
 INTERIM_USER=postgres
+# INTERIM_SCHEMA is the COMPANY schema (employees and their values).
+# INTERIM_PAYROLL_SCHEMA is the PAYROLL schema on the desktop - calendars,
+# calculation programs, tax codes. Both must be refreshed together: the
+# calendar that drives payroll_periods lives in the payroll one.
+# It is restored under a DIFFERENT name in docker, because a schema literally
+# named 'pipro' shadows 'public' for the app's own 'pipro' user and makes every
+# tenant appear to vanish. Do not set INTERIM_PAYROLL_TARGET to 'pipro'.
 INTERIM_SCHEMA=airplane
+INTERIM_PAYROLL_SCHEMA=pipro
+INTERIM_PAYROLL_TARGET=legacy_pipro
 
 # Leave INTERIM_PASSWORD blank to be prompted each run (it is never echoed).
 # Fill it in only if you would rather not retype it - this file is gitignored.

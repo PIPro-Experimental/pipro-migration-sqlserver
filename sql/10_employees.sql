@@ -33,7 +33,18 @@ SET search_path TO :"tenant_schema", public;
 CREATE TEMP TABLE _src ON COMMIT DROP AS
 SELECT
     e.employeeno::text                               AS legacy_empno,       -- join key → minted user_id
-    e.employeeid_f01::text                           AS employee_code,      -- SQL server EmpNo - unique, non-blank, numeric, possible zero
+    -- QUALIFIED BY PAYROLL. employees.employee_code is UNIQUE across the whole
+    -- tenant, but legacy only ever guaranteed EmpNo unique WITHIN a payroll
+    -- database - global uniqueness was of the (Payroll, EmpNo) pair. A client
+    -- with several payrolls converting into one tenant therefore collides, and
+    -- step 3's ON CONFLICT DO NOTHING would SILENTLY SKIP the second payroll's
+    -- employees. The prefix is the legacy payroll number, so codes read
+    -- "3/57" = payroll 3, employee 57. It is injective because the payroll
+    -- number cannot itself contain the separator, so it stays safe even where
+    -- EmployeeId_F01 is alphanumeric.
+    -- employee_code is user-facing and editable, so a client who wants something
+    -- else can retype it afterwards.
+    :'payroll_number' || '/' || e.employeeid_f01::text  AS employee_code,
     e.surname_f02                                    AS last_name,
     e.givennames_f21                                 AS first_name,
     e.identity_f12::text                             AS id_number,
@@ -47,7 +58,18 @@ SELECT
     1                                                  AS currency,
     upper(nullif(e.taxcountrycode_f14, ''))::char(3) AS nationality_country_code, -- there are two sets of country codes, one char(2) & one char(3)
     CASE upper(left(coalesce(e.gender_f22,''),1)) WHEN 'M' THEN 'male' WHEN 'F' THEN 'female' ELSE 'unspecified' END AS gender,
-    COALESCE(NULLIF(e.emailaddress_f40, ''), e.employeeid_f01::text || '@migrated.invalid') AS email         -- synthesise when F40 blank
+    -- Synthesised when F40 is blank, and QUALIFIED BY PAYROLL for the same reason
+    -- employee_code is: pipro_core_users.email is UNIQUE across the whole
+    -- installation, so two payrolls each holding an employee 57 would both
+    -- synthesise '57@migrated.invalid'. Step 2 mints users with a plain INSERT and
+    -- no conflict handling, so that collision does not skip a row - it FAILS the
+    -- whole import. A dash rather than the code's slash, to stay a conventional
+    -- local-part.
+    -- NOTE this does not protect against two employees sharing a REAL address
+    -- (F40) across payrolls, which is a live possibility for a multi-payroll
+    -- client and would fail the same way. See conversion-plan.md §6.
+    COALESCE(NULLIF(e.emailaddress_f40, ''),
+             :'payroll_number' || '-' || e.employeeid_f01::text || '@migrated.invalid') AS email
 -- Basic rate (owner correction 2026-08-01, learned the hard way on the first
 -- live comparison): the basiccode ordinal is a CALC INPUT (this client's is a
 -- user-named annual "raise lever"), NOT period pay — mapping it to the

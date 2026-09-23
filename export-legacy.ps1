@@ -58,7 +58,9 @@ CREATE SCHEMA IF NOT EXISTS compare;
 DROP TABLE IF EXISTS compare.legacy_imf, compare.legacy_amts, compare.legacy_inds,
                      compare.legacy_refnos, compare.legacy_dates,
                      compare.legacy_parm_refnos, compare.legacy_descf;
-CREATE TABLE compare.legacy_imf    (empno INT PRIMARY KEY, surname TEXT, inits TEXT);
+-- payroll is staged because employee_code is qualified "<payroll>/<EmpNo>":
+-- the bare EmpNo is unique only within a payroll database.
+CREATE TABLE compare.legacy_imf    (empno INT PRIMARY KEY, payroll INT, surname TEXT, inits TEXT);
 CREATE TABLE compare.legacy_amts   (empno INT, ordinalno INT, amt DOUBLE PRECISION);
 CREATE TABLE compare.legacy_inds   (empno INT, ordinalno INT, ind TEXT);
 CREATE TABLE compare.legacy_refnos (empno INT, ordinalno INT, refno TEXT, refnocode TEXT);
@@ -77,8 +79,8 @@ if ($LASTEXITCODE -ne 0) { Write-Host "==> Staging failed." -ForegroundColor Red
 # side. Pipe-delimited because no legacy value in these columns contains a pipe
 # (Ind is varchar(1), RefNo varchar(25), the rest are integers).
 $extracts = @(
-    @{ Table = 'compare.legacy_imf';    Cols = 'empno, surname, inits';
-       Query = "SELECT EmpNo, ISNULL(Surname,''), ISNULL(Inits,'') FROM PW_IMF WHERE EmpNo > 0" },
+    @{ Table = 'compare.legacy_imf';    Cols = 'empno, payroll, surname, inits';
+       Query = "SELECT EmpNo, Payroll, ISNULL(Surname,''), ISNULL(Inits,'') FROM PW_IMF WHERE EmpNo > 0" },
     @{ Table = 'compare.legacy_amts';   Cols = 'empno, ordinalno, amt';
        Query = "SELECT EmpNo, OrdinalNo, Amt FROM PW_Amts WHERE EmpNo > 0" },
     @{ Table = 'compare.legacy_inds';   Cols = 'empno, ordinalno, ind';

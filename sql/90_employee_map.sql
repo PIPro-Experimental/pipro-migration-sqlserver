@@ -36,8 +36,12 @@
 -- values — not an empty join. Section 6 asserts the coincidence explicitly so
 -- it can never be leaned on again by accident.
 --
--- THE SPINE is employee_code: interim employeeid_f01 = pipro employee_code =
--- legacy EmpNo-as-text. It is the only value that survives both re-mintings.
+-- THE SPINE is employee_code, qualified by payroll: "<legacy payroll>/<EmpNo>".
+-- The bare EmpNo is NOT enough - it is unique only within a payroll database,
+-- while pipro's employee_code is unique across the whole tenant, so a
+-- multi-payroll client collides on it. Every stage derives the same string from
+-- its own payroll column: interim employees.payroll_f04, legacy PW_IMF.Payroll,
+-- and :payroll_number when 10_employees writes it.
 --
 -- Marker legend:
 --   CONFIRM = source settled; verify your data satisfies the rule.
@@ -82,7 +86,7 @@ INSERT INTO compare.employee_map (
     pipro_user_id, surname, status, note)
 SELECT
     :'tenant_schema',
-    COALESCE(btrim(a.employeeid_f01), btrim(t.employee_code)),
+    COALESCE(btrim(a.payroll_f04::text || '/' || a.employeeid_f01), btrim(t.employee_code)),
     a.employeeno,
     t.id,
     t.user_id,
@@ -102,7 +106,7 @@ SELECT
     END
 FROM      :"legacy_company_schema".employees a
 FULL JOIN :"tenant_schema".employees        t
-       ON btrim(t.employee_code) = btrim(a.employeeid_f01);
+       ON btrim(t.employee_code) = btrim(a.payroll_f04::text || '/' || a.employeeid_f01);
 
 COMMIT;
 
@@ -136,7 +140,7 @@ ORDER BY employee_code;
 
 \echo ''
 \echo '=== 4. Duplicate-code check (the cause of a silent drop) ==================='
-SELECT btrim(employeeid_f01) AS employee_code, count(*) AS source_rows
+SELECT btrim(payroll_f04::text || '/' || employeeid_f01) AS employee_code, count(*) AS source_rows
 FROM :"legacy_company_schema".employees
 GROUP BY 1 HAVING count(*) > 1
 ORDER BY 1;

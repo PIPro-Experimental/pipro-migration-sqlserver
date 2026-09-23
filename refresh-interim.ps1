@@ -1,11 +1,23 @@
 <#
-    refresh-interim.ps1 - hop 1.5. Copies the interim (desktop Postgres) schema into
-    the docker Postgres, replacing the previous copy.
+    refresh-interim.ps1 - hop 1.5. Copies the interim (desktop Postgres) schemas
+    into the docker Postgres, replacing the previous copies.
 
     WHY THIS EXISTS: PostgresImport writes to the DESKTOP Postgres, but the migration
     scripts and the parity report both read a COPY of it inside docker. Re-running the
     import does NOT change the docker copy, so a report run straight after an import
     silently re-measures the OLD data.
+
+    BOTH SCHEMAS, ALWAYS. The interim database is split the way DataDictionary splits
+    it: a COMPANY schema (employees and their values) and a PAYROLL schema (calendar,
+    calculation programs, tax codes). Refreshing only the company one leaves
+    80_payroll_periods building the calendar from a stale settings_calendar - which is
+    exactly how a re-import can appear to ignore the legacy calendar.
+
+    THE PAYROLL SCHEMA IS RENAMED ON THE WAY IN. On the desktop it is called 'pipro';
+    a schema of that name in docker shadows 'public' for the app's own 'pipro' user and
+    makes every tenant appear to vanish (this has happened once). It is therefore
+    restored and renamed inside ONE transaction, so no other session ever sees a
+    committed schema called 'pipro'.
 
     VERSION MISMATCH (the reason this is not a one-liner): the desktop server is
     PostgreSQL 18 and the docker server is pinned to 16.
@@ -20,8 +32,8 @@
       * If the restore ever fails on some OTHER unrecognized parameter, add it to
         $incompatibleSettings rather than loosening ON_ERROR_STOP.
 
-    DESTRUCTIVE: drops and recreates the target schema in docker. Tenant schemas are
-    untouched.
+    DESTRUCTIVE: drops and recreates both target schemas in docker. Tenant schemas
+    are untouched.
 
     Connection details live in settings.local.txt (copy settings.example.txt).
     Parameters override the file for a one-off run.
@@ -44,12 +56,20 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\load-settings.ps1"
 $cfg = Import-PiproSettings
 
-if (-not $Schema)          { $Schema         = Get-PiproSetting $cfg 'INTERIM_SCHEMA' }
-if (-not $DesktopHost)     { $DesktopHost    = Get-PiproSetting $cfg 'INTERIM_HOST' }
-if (-not $DesktopPort)     { $DesktopPort    = [int](Get-PiproSetting $cfg 'INTERIM_PORT') }
-if (-not $DesktopDb)       { $DesktopDb      = Get-PiproSetting $cfg 'INTERIM_DB' }
-if (-not $DesktopUser)     { $DesktopUser    = Get-PiproSetting $cfg 'INTERIM_USER' }
+if (-not $Schema)          { $Schema          = Get-PiproSetting $cfg 'INTERIM_SCHEMA' }
+if (-not $DesktopHost)     { $DesktopHost     = Get-PiproSetting $cfg 'INTERIM_HOST' }
+if (-not $DesktopPort)     { $DesktopPort     = [int](Get-PiproSetting $cfg 'INTERIM_PORT') }
+if (-not $DesktopDb)       { $DesktopDb       = Get-PiproSetting $cfg 'INTERIM_DB' }
+if (-not $DesktopUser)     { $DesktopUser     = Get-PiproSetting $cfg 'INTERIM_USER' }
 if (-not $DesktopPassword) { $DesktopPassword = Get-PiproSetting $cfg 'INTERIM_PASSWORD' -AllowEmpty }
+
+$payrollSource = Get-PiproSetting $cfg 'INTERIM_PAYROLL_SCHEMA'
+$payrollTarget = Get-PiproSetting $cfg 'INTERIM_PAYROLL_TARGET'
+if ($payrollTarget -eq 'pipro') {
+    Write-Host "==> INTERIM_PAYROLL_TARGET must not be 'pipro' - a schema of that name" -ForegroundColor Red
+    Write-Host "    shadows 'public' for the app's own 'pipro' user and hides every tenant." -ForegroundColor Red
+    exit 1
+}
 
 $dockerContainer = Get-PiproSetting $cfg 'DOCKER_CONTAINER'
 $dockerDb        = Get-PiproSetting $cfg 'DOCKER_DB'
@@ -58,6 +78,7 @@ $dockerPassword  = Get-PiproSetting $cfg 'DOCKER_PASSWORD'
 
 # Settings emitted by a newer pg_dump that an older server will not accept.
 $incompatibleSettings = @('transaction_timeout')
+$stripExpr = ($incompatibleSettings | ForEach-Object { "/^SET $_ = /d" }) -join '; '
 
 cmd /c "docker info >nul 2>&1"
 if ($LASTEXITCODE -ne 0) {
@@ -75,6 +96,7 @@ if (-not $PgDumpPath) {
     }
     $PgDumpPath = $candidates[0].FullName
 }
+$psqlPath = Join-Path (Split-Path $PgDumpPath) 'psql.exe'
 Write-Host "==> Using $PgDumpPath" -ForegroundColor DarkGray
 
 if (-not $DesktopPassword) {
@@ -82,61 +104,82 @@ if (-not $DesktopPassword) {
     $DesktopPassword = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
         [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
 }
-$env:PGPASSWORD = $DesktopPassword
+
+function Sync-Schema {
+    param([string]$Source, [string]$Target)
+
+    Write-Host ""
+    Write-Host "==> $DesktopDb.$Source  ->  docker.$Target" -ForegroundColor Cyan
+
+    # Check the source BEFORE dropping anything on the target, so a bad name or an
+    # unreachable desktop leaves the existing copy intact.
+    $tableCount = & $psqlPath -h $DesktopHost -p $DesktopPort -U $DesktopUser -d $DesktopDb -t -A `
+        -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = '$Source'"
+    if (($LASTEXITCODE -ne 0) -or ([int]$tableCount -le 0)) {
+        Write-Host "    Could not read schema '$Source' on the desktop DB. Nothing was changed." -ForegroundColor Red
+        return $false
+    }
+    Write-Host "    $tableCount tables on the desktop." -ForegroundColor DarkGray
+
+    $dumpFile = Join-Path $env:TEMP "interim-$Source.sql"
+    & $PgDumpPath -h $DesktopHost -p $DesktopPort -U $DesktopUser -d $DesktopDb `
+                  -n $Source --no-owner --no-privileges --no-tablespaces -f $dumpFile
+    if ($LASTEXITCODE -ne 0) { Write-Host "    pg_dump failed. Nothing was changed." -ForegroundColor Red; return $false }
+    Write-Host ("    dumped {0:N1} MB" -f ((Get-Item $dumpFile).Length / 1MB)) -ForegroundColor DarkGray
+
+    cmd /c "docker cp `"$dumpFile`" ${dockerContainer}:/tmp/interim-$Source.sql >nul 2>&1"
+    if ($LASTEXITCODE -ne 0) { Write-Host "    docker cp failed. Nothing was changed." -ForegroundColor Red; return $false }
+
+    # The DROP / restore / RENAME are concatenated into one file and run with a
+    # single -f under --single-transaction. Passing them as separate -c arguments
+    # through `sh -c` needs line continuations, and the quoting does not survive.
+    # One transaction means the transient schema named $Source is never visible to
+    # another session - which is what makes renaming 'pipro' safe.
+    $pre  = "DROP SCHEMA IF EXISTS $Target CASCADE;"
+    $post = ""
+    if ($Source -ne $Target) {
+        $pre  = "$pre DROP SCHEMA IF EXISTS $Source CASCADE;"
+        $post = "ALTER SCHEMA $Source RENAME TO $Target;"
+    }
+
+    docker exec $dockerContainer sh -c @"
+set -e
+sed -i '$stripExpr' /tmp/interim-$Source.sql
+{ echo '$pre'; cat /tmp/interim-$Source.sql; echo '$post'; } > /tmp/restore-$Source.sql
+export PGPASSWORD=$dockerPassword
+psql -U $dockerUser -d $dockerDb -v ON_ERROR_STOP=on -q --single-transaction -f /tmp/restore-$Source.sql
+rm -f /tmp/interim-$Source.sql /tmp/restore-$Source.sql
+"@
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "    Restore failed - the transaction rolled back, so $Target is unchanged." -ForegroundColor Red
+        Write-Host "    If the error names an unrecognized configuration parameter, add it to" -ForegroundColor Yellow
+        Write-Host "    `$incompatibleSettings at the top of this script and re-run." -ForegroundColor Yellow
+        return $false
+    }
+    Write-Host "    restored." -ForegroundColor DarkGray
+    return $true
+}
 
 try {
-    # --- Sanity-check the source before dropping anything on the target ----------
-    Write-Host "==> Checking $DesktopDb.$Schema on $DesktopHost`:$DesktopPort ..." -ForegroundColor Cyan
-    $psqlPath = Join-Path (Split-Path $PgDumpPath) 'psql.exe'
-    $tableCount = & $psqlPath -h $DesktopHost -p $DesktopPort -U $DesktopUser -d $DesktopDb -t -A `
-        -c "SELECT count(*) FROM information_schema.tables WHERE table_schema = '$Schema'"
-    if (($LASTEXITCODE -ne 0) -or ([int]$tableCount -le 0)) {
-        Write-Host "==> Could not read schema '$Schema' on the desktop DB. Nothing was changed." -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "    $tableCount tables found." -ForegroundColor DarkGray
-
-    # --- Dump with the LOCAL (newer) client --------------------------------------
-    $dumpFile = Join-Path $env:TEMP "interim-$Schema.sql"
-    Write-Host "==> Dumping to $dumpFile ..." -ForegroundColor Cyan
-    & $PgDumpPath -h $DesktopHost -p $DesktopPort -U $DesktopUser -d $DesktopDb `
-                  -n $Schema --no-owner --no-privileges --no-tablespaces -f $dumpFile
-    if ($LASTEXITCODE -ne 0) { Write-Host "==> pg_dump failed. Nothing was changed." -ForegroundColor Red; exit 1 }
-    Write-Host ("    {0:N1} MB" -f ((Get-Item $dumpFile).Length / 1MB)) -ForegroundColor DarkGray
+    $env:PGPASSWORD = $DesktopPassword
+    $ok = (Sync-Schema -Source $Schema        -Target $Schema) -and `
+          (Sync-Schema -Source $payrollSource -Target $payrollTarget)
 }
 finally {
     Remove-Item Env:\PGPASSWORD -ErrorAction SilentlyContinue
 }
+if (-not $ok) { exit 1 }
 
-# --- Ship it into the container and restore ---------------------------------------
-Write-Host "==> Copying into the container ..." -ForegroundColor Cyan
-cmd /c "docker cp `"$dumpFile`" ${dockerContainer}:/tmp/interim.sql >nul 2>&1"
-if ($LASTEXITCODE -ne 0) { Write-Host "==> docker cp failed. Nothing was changed." -ForegroundColor Red; exit 1 }
-
-$stripExpr = ($incompatibleSettings | ForEach-Object { "/^SET $_ = /d" }) -join '; '
-
-Write-Host "==> Replacing docker schema '$Schema' ..." -ForegroundColor Cyan
-docker exec $dockerContainer sh -c @"
-set -e
-sed -i '$stripExpr' /tmp/interim.sql
-export PGPASSWORD=$dockerPassword
-psql -U $dockerUser -d $dockerDb -v ON_ERROR_STOP=on -q -c 'DROP SCHEMA IF EXISTS $Schema CASCADE'
-psql -U $dockerUser -d $dockerDb -v ON_ERROR_STOP=on -q -f /tmp/interim.sql
-rm -f /tmp/interim.sql
-"@
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "==> Restore failed." -ForegroundColor Red
-    Write-Host "    If the error names an unrecognized configuration parameter, add it to" -ForegroundColor Yellow
-    Write-Host "    `$incompatibleSettings at the top of this script and re-run." -ForegroundColor Yellow
-    exit 1
-}
-
-Write-Host "==> Verifying ..." -ForegroundColor Cyan
+Write-Host "`n==> Verifying ..." -ForegroundColor Cyan
 docker exec -e PGPASSWORD=$dockerPassword $dockerContainer psql -U $dockerUser -d $dockerDb `
-    -c "SELECT '$Schema' AS schema, (SELECT count(*) FROM $Schema.employees) AS employees, (SELECT count(*) FROM $Schema.employee_alpha) AS alpha, (SELECT count(*) FROM $Schema.employee_amounts) AS amounts, (SELECT count(*) FROM $Schema.employee_alpha WHERE ordinalno IN (106,107) AND (reference_v IS NULL OR btrim(reference_v) = '')) AS blank_office_site;"
+    -c "SELECT '$Schema' AS company_schema,
+               (SELECT count(*) FROM $Schema.employees)       AS employees,
+               (SELECT count(*) FROM $Schema.employee_alpha)  AS alpha,
+               (SELECT count(*) FROM $Schema.employee_amounts) AS amounts,
+               '$payrollTarget' AS payroll_schema,
+               (SELECT count(*) FROM $payrollTarget.settings_calendar) AS calendar_periods;"
 
-Write-Host "`n==> Done. The docker copy now matches the desktop import." -ForegroundColor Green
-Write-Host "    blank_office_site should be 0 if the RefNoCode fix took." -ForegroundColor Green
+Write-Host "`n==> Done. Both docker copies now match the desktop import." -ForegroundColor Green
 Write-Host "    NOTE: PostgresImport re-mints employees.employeeno on every run, so the" -ForegroundColor Yellow
-Write-Host "    'emp-<surrogate>' ids in an EXISTING tenant may no longer line up." -ForegroundColor Yellow
-Write-Host "    import_from_interim.cmd checks that automatically before it writes." -ForegroundColor Yellow
+Write-Host "    'emp-<surrogate>' ids in an EXISTING tenant may no longer line up. A full" -ForegroundColor Yellow
+Write-Host "    import resets the tenant first, which makes that a non-issue." -ForegroundColor Yellow

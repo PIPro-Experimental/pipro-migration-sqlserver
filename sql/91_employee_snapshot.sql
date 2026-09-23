@@ -76,24 +76,26 @@ VALUES (:'snap', :'system', :'phase', :'tenant_schema', :'legacy_company_schema'
 
 -- ---------------------------------------------------------------------------
 -- INTERIM — the desktop iteration-2 copy. Child rows key on the interim
--- surrogate, so employee_code comes off the interim employees table.
+-- surrogate, so employee_code comes off the interim employees table — qualified
+-- by payroll ("<payroll>/<EmpNo>"), because the bare EmpNo is unique only within
+-- a payroll database while pipro's employee_code is unique across the tenant.
 -- ---------------------------------------------------------------------------
 INSERT INTO compare.employee_value (snap, employee_code, bank, ordinal_no, value_num, origin)
-SELECT :'snap', btrim(e.employeeid_f01), 'Q', a.ordinalno, a.amount_q, 'employee_amounts'
+SELECT :'snap', btrim(e.payroll_f04::text || '/' || e.employeeid_f01), 'Q', a.ordinalno, a.amount_q, 'employee_amounts'
 FROM :"legacy_company_schema".employee_amounts a
 JOIN :"legacy_company_schema".employees e ON e.employeeno = a.employeeno
 WHERE :'system' = 'interim'
 ON CONFLICT DO NOTHING;
 
 INSERT INTO compare.employee_value (snap, employee_code, bank, ordinal_no, value_text, origin)
-SELECT :'snap', btrim(e.employeeid_f01), 'V', v.ordinalno, v.reference_v, 'employee_alpha'
+SELECT :'snap', btrim(e.payroll_f04::text || '/' || e.employeeid_f01), 'V', v.ordinalno, v.reference_v, 'employee_alpha'
 FROM :"legacy_company_schema".employee_alpha v
 JOIN :"legacy_company_schema".employees e ON e.employeeno = v.employeeno
 WHERE :'system' = 'interim'
 ON CONFLICT DO NOTHING;
 
 INSERT INTO compare.employee_value (snap, employee_code, bank, ordinal_no, value_text, origin)
-SELECT :'snap', btrim(e.employeeid_f01), 'D', d.ordinalno, d.date_d0::text, 'employee_dates'
+SELECT :'snap', btrim(e.payroll_f04::text || '/' || e.employeeid_f01), 'D', d.ordinalno, d.date_d0::text, 'employee_dates'
 FROM :"legacy_company_schema".employee_dates d
 JOIN :"legacy_company_schema".employees e ON e.employeeno = d.employeeno
 WHERE :'system' = 'interim'

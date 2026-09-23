@@ -55,14 +55,14 @@ VALUES (:'snap', 'legacy', :'phase', 'sqlserver:pipro');
 
 -- Q — amounts. float -> numeric(,4).
 INSERT INTO compare.employee_value (snap, employee_code, bank, ordinal_no, value_num, origin)
-SELECT :'snap', btrim(m.empno::text), 'Q', a.ordinalno, round(a.amt::numeric, 4), 'PW_Amts'
+SELECT :'snap', btrim(m.payroll::text || '/' || m.empno::text), 'Q', a.ordinalno, round(a.amt::numeric, 4), 'PW_Amts'
 FROM compare.legacy_amts a
 JOIN compare.legacy_imf  m ON m.empno = a.empno
 ON CONFLICT DO NOTHING;
 
 -- V — indicators at the ordinal as-is.
 INSERT INTO compare.employee_value (snap, employee_code, bank, ordinal_no, value_text, origin)
-SELECT :'snap', btrim(m.empno::text), 'V', i.ordinalno, i.ind, 'PW_Inds'
+SELECT :'snap', btrim(m.payroll::text || '/' || m.empno::text), 'V', i.ordinalno, i.ind, 'PW_Inds'
 FROM compare.legacy_inds i
 JOIN compare.legacy_imf  m ON m.empno = i.empno
 ON CONFLICT DO NOTHING;
@@ -85,7 +85,7 @@ ON CONFLICT DO NOTHING;
 -- needs no home downstream — for N it has been resolved into the value, and for
 -- Y it only records what the default used to be.
 INSERT INTO compare.employee_value (snap, employee_code, bank, ordinal_no, value_text, origin)
-SELECT :'snap', btrim(m.empno::text), 'V', r.ordinalno + 100,
+SELECT :'snap', btrim(m.payroll::text || '/' || m.empno::text), 'V', r.ordinalno + 100,
        CASE WHEN p.refnodescind = 'N' THEN d.description ELSE r.refno END,
        CASE WHEN p.refnodescind = 'N' THEN 'PW_Descf'    ELSE 'PW_RefNos' END
 FROM compare.legacy_refnos r
@@ -98,19 +98,19 @@ ON CONFLICT DO NOTHING;
 
 -- D — dates. day-number -> DATE, rendered ISO to match the downstream TEXT.
 INSERT INTO compare.employee_value (snap, employee_code, bank, ordinal_no, value_text, origin)
-SELECT :'snap', btrim(m.empno::text), 'D', d.ordinalno,
+SELECT :'snap', btrim(m.payroll::text || '/' || m.empno::text), 'D', d.ordinalno,
        (DATE '1799-12-31' + d.datevalue)::text, 'PW_Dates'
 FROM compare.legacy_dates d
 JOIN compare.legacy_imf   m ON m.empno = d.empno
 ON CONFLICT DO NOTHING;
 
--- Fill the legacy key on the map now that we have PW_IMF. The spine is
--- employee_code = EmpNo-as-text; this column exists to PROVE that, not to be
--- joined through.
+-- Fill the legacy key on the map now that we have PW_IMF. The spine is the
+-- payroll-qualified code; legacy_empno holds the BARE EmpNo, and exists to prove
+-- the derivation rather than to be joined through.
 UPDATE compare.employee_map m
    SET legacy_empno = l.empno::text
   FROM compare.legacy_imf l
- WHERE btrim(m.employee_code) = btrim(l.empno::text);
+ WHERE btrim(m.employee_code) = btrim(l.payroll::text || '/' || l.empno::text);
 
 COMMIT;
 
