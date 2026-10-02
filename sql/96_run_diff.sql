@@ -123,6 +123,21 @@ FROM compare.run_snapshot WHERE snap IN (:'a', :'b')
 ORDER BY system DESC;
 
 \echo ''
+\echo '=== 0a. Snapshot freshness ================================================'
+-- The two snapshots are meant to be captured back-to-back by the report. A wide
+-- gap means one of them FAILED and an older one survived: 95 wraps its
+-- delete-and-insert in a transaction, so a failed capture rolls back and leaves
+-- the previous snapshot in place - and everything below would then compare data
+-- that no longer exists, with nothing but taken_at to give it away.
+SELECT
+    max(taken_at) - min(taken_at) AS captured_apart,
+    CASE WHEN count(*) < 2 THEN 'ONE SIDE MISSING - a snapshot was never captured'
+         WHEN max(taken_at) - min(taken_at) > interval '1 hour'
+           THEN 'STALE - these were not captured together. Re-run the export and both 95 captures before reading anything below.'
+         ELSE 'captured together' END AS verdict
+FROM compare.run_snapshot WHERE snap IN (:'a', :'b');
+
+\echo ''
 \echo '=== 0b. Gate =============================================================='
 SELECT a_lines, b_lines, a_totals, b_totals, master_diffs, gate,
        CASE gate
@@ -158,15 +173,43 @@ LEFT JOIN compare.run_total pb ON pb.snap = :'b' AND pb.metric = t.metric
 GROUP BY t.metric ORDER BY t.metric;
 
 \echo ''
-\echo '=== 2. Employees whose totals differ ======================================'
-SELECT la.employee_code, la.metric, la.value_num AS legacy, pb.value_num AS pipro,
-       COALESCE(pb.value_num,0) - la.value_num AS delta
+\echo '=== 2a. Metrics missing from one side entirely ============================'
+-- Reported ONCE PER METRIC, not once per employee. A metric the other side does
+-- not produce at all is one finding, not 150 - and listing it per employee buries
+-- the metrics that genuinely disagree. pipro previews carry gross and net only,
+-- so PAYE lands here until a run is COMMITTED and payslip_statutory_za exists.
+SELECT metric,
+       count(*) FILTER (WHERE side = 'legacy only') AS legacy_only_employees,
+       count(*) FILTER (WHERE side = 'pipro only')  AS pipro_only_employees,
+       sum(value_num) FILTER (WHERE side = 'legacy only') AS legacy_unmatched_total,
+       sum(value_num) FILTER (WHERE side = 'pipro only')  AS pipro_unmatched_total
+FROM (
+    SELECT la.metric, la.value_num, 'legacy only' AS side
+      FROM compare.run_total la
+      LEFT JOIN compare.run_total pb ON pb.snap = :'b' AND pb.employee_code = la.employee_code
+                                    AND pb.metric = la.metric
+     WHERE la.snap = :'a' AND pb.snap IS NULL
+    UNION ALL
+    SELECT pb.metric, pb.value_num, 'pipro only'
+      FROM compare.run_total pb
+      LEFT JOIN compare.run_total la ON la.snap = :'a' AND la.employee_code = pb.employee_code
+                                    AND la.metric = pb.metric
+     WHERE pb.snap = :'b' AND la.snap IS NULL
+) x
+GROUP BY metric ORDER BY metric;
+
+\echo ''
+\echo '=== 2b. EVERY employee whose totals differ, by metric ====================='
+-- No cap. Grouped by metric first so one noisy metric cannot crowd out another,
+-- then worst delta first within each. Only metrics present on BOTH sides appear
+-- here; a wholly absent metric is section 2a's business.
+SELECT la.metric, la.employee_code, la.value_num AS legacy, pb.value_num AS pipro,
+       pb.value_num - la.value_num AS delta
 FROM compare.run_total la
-LEFT JOIN compare.run_total pb ON pb.snap = :'b' AND pb.employee_code = la.employee_code
-                              AND pb.metric = la.metric
+JOIN compare.run_total pb ON pb.snap = :'b' AND pb.employee_code = la.employee_code
+                         AND pb.metric = la.metric
 WHERE la.snap = :'a' AND la.value_num IS DISTINCT FROM pb.value_num
-ORDER BY abs(COALESCE(pb.value_num,0) - la.value_num) DESC, la.employee_code
-LIMIT 40;
+ORDER BY la.metric, abs(pb.value_num - la.value_num) DESC, la.employee_code;
 
 \echo ''
 \echo '=== 3. Line summary by bank ==============================================='
@@ -186,8 +229,7 @@ FROM compare.run_value_diff
 WHERE verdict <> 'match' AND snap_a = :'a' AND snap_b = :'b'
   AND (SELECT gate FROM _gate) IN ('full_detail','shape_differs')
 GROUP BY bank, ordinal_no, COALESCE(a_origin, b_origin)
-ORDER BY rows DESC, total_abs_delta DESC
-LIMIT 40;
+ORDER BY rows DESC, total_abs_delta DESC;
 
 \echo ''
 \echo '=== 5. Differing rows (full detail only) =================================='
@@ -195,8 +237,10 @@ SELECT employee_code, bank, ordinal_no, a_num AS legacy, b_num AS pipro, delta, 
 FROM compare.run_value_diff
 WHERE verdict <> 'match' AND snap_a = :'a' AND snap_b = :'b'
   AND (SELECT gate FROM _gate) = 'full_detail'
-ORDER BY abs(COALESCE(delta,0)) DESC NULLS LAST, employee_code, ordinal_no
-LIMIT 100;
+-- No cap. Payroll differences get checked line by line, so a truncated list is
+-- worse than a long one. Ordered by ordinal then employee so one code's rows sit
+-- together; redirect the report to a file if the console is unwieldy.
+ORDER BY bank, ordinal_no, employee_code;
 
 \echo ''
 \echo '=== 6. Experimental lines that could not be placed on a legacy ordinal ===='

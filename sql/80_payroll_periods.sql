@@ -9,9 +9,9 @@
 --   period_end   <- run_date
 --   period_start <- first of that month
 --   payday       <- run_date          CHOOSE: legacy run date = payday?
---   status       <- 'closed' for months fully before the cutover month
---                   (legacy already ran them; their history came via
---                   run_history), 'open' for the cutover month onward
+--   status       <- 'closed' for every period legacy ALREADY RAN, i.e. up to and
+--                   including settings_global.current_run_date; 'open' after it.
+--                   DERIVED from the data, not from :cutover - see the CASE below.
 --
 -- Runner variables: :tenant_schema :target_payroll_id :payroll_number :cutover
 -- ===========================================================================
@@ -28,7 +28,16 @@ SELECT
     c.run_date::text,
     c.run_date::text,
     p.country_code,
-    CASE WHEN c.run_date < date_trunc('month', :'cutover'::date)::date
+    -- DERIVED, not taken from :cutover. settings_global.current_run_date is the
+    -- period legacy last actually ran (carried by 55), so anything up to and
+    -- including it is history and anything after it is pipro's to run. Passing a
+    -- cutover instead was wrong in a way that was easy to miss: convert.ps1 hands
+    -- it TODAY's date, so converting in October closed July, August and September
+    -- as well - periods legacy had never run and pipro then could not.
+    -- Falls back to :cutover only if the pointer is missing.
+    CASE WHEN c.run_date <= COALESCE(
+                (SELECT g.current_run_date::date FROM settings_global g LIMIT 1),
+                date_trunc('month', :'cutover'::date)::date - 1)
          THEN 'closed' ELSE 'open' END,
     :'cutover',
     'regular'
