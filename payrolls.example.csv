@@ -1,0 +1,35 @@
+# pipro conversion manifest — one row per import unit.
+#
+# SETUP: copy to payrolls.csv (gitignored) and edit. Lines starting with # are
+# ignored, as are blank lines. Whitespace around values is trimmed.
+#
+# A client with ten payrolls has ten SQL Server databases and ten rows here, all
+# against the SAME tenant_slug — payrolls are rows inside one tenant, not
+# separate tenants.
+#
+# COLUMNS
+#   source_db              the SQL Server database you restore and point
+#                          PostgresImport at. Recorded so the log says which
+#                          backup produced which schemas; nothing connects to it
+#                          from here.
+#   company_schema         where this payroll's interim COMPANY schema is parked
+#   payroll_schema         ... and its PAYROLL schema, in the docker Postgres.
+#                          Both must be UNIQUE across the manifest: PostgresImport
+#                          always writes the same two schema names on the desktop,
+#                          so each payroll is renamed on the way into docker or the
+#                          next run overwrites the last. Never use 'pipro' for the
+#                          payroll one - it shadows 'public' for the app's own user.
+#   tenant_slug            target tenant (tenant_<slug>), already provisioned
+#   target_payroll_id      target payrolls.id in that tenant, already created
+#   legacy_payroll_number  the interim/legacy Payroll number. VERIFIED against the
+#                          data after the refresh, not trusted.
+#   role                   current | history
+#   tax_year               required for history rows, blank for current
+#
+# role=history is not implemented yet; rows are validated and reported, then
+# skipped. See conversion-plan.md section 5.
+
+source_db,company_schema,payroll_schema,tenant_slug,target_payroll_id,legacy_payroll_number,role,tax_year
+acme_monthly,acme_mon_co,acme_mon_pay,acme,1,1,current,
+acme_weekly,acme_wk_co,acme_wk_pay,acme,2,2,current,
+acme_monthly_2025,acme_mon25_co,acme_mon25_pay,acme,1,1,history,2025

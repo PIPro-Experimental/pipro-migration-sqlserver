@@ -18,7 +18,14 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $here = $PSScriptRoot
-$PG   = @('exec','-i','-e','PGPASSWORD=pipro-dev-only','pipro-postgres','psql','-U','pipro','-d','pipro')
+
+. "$PSScriptRoot\load-settings.ps1"
+$cfg             = Import-PiproSettings
+$dockerContainer = Get-PiproSetting $cfg 'DOCKER_CONTAINER'
+$dockerDb        = Get-PiproSetting $cfg 'DOCKER_DB'
+$dockerUser      = Get-PiproSetting $cfg 'DOCKER_USER'
+$dockerPassword  = Get-PiproSetting $cfg 'DOCKER_PASSWORD'
+$PG   = @('exec','-i','-e',"PGPASSWORD=$dockerPassword",$dockerContainer,'psql','-U',$dockerUser,'-d',$dockerDb)
 
 # --- Docker preflight (do NOT auto-launch; the user starts it manually) --------
 # cmd wrapper: PS 5.1 turns native stderr (e.g. docker WARNINGs) into
@@ -35,7 +42,7 @@ Get-Content (Join-Path $here 'sql/00_migration_map.sql') -Raw | docker @PG -v ON
 if ($LASTEXITCODE -ne 0) { Write-Host "==> Failed to load migration_map." -ForegroundColor Red; exit 1 }
 
 # --- Read the map rows ----------------------------------------------------------
-$raw = docker exec -e PGPASSWORD=pipro-dev-only pipro-postgres psql -U pipro -d pipro -t -A -F '|' `
+$raw = docker exec -e "PGPASSWORD=$dockerPassword" $dockerContainer psql -U $dockerUser -d $dockerDb -t -A -F '|' `
         -c "SELECT legacy_company_schema, legacy_payroll_schema, tenant_slug, target_payroll_id, legacy_payroll_number FROM migration_map ORDER BY legacy_company_schema"
 if ($LASTEXITCODE -ne 0) { Write-Host "==> Could not read migration_map." -ForegroundColor Red; exit 1 }
 

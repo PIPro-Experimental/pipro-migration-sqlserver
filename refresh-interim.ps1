@@ -49,7 +49,12 @@ param(
     [string]$DesktopDb,
     [string]$DesktopUser,
     [string]$DesktopPassword,
-    [string]$PgDumpPath
+    [string]$PgDumpPath,
+    # Both default to settings.local.txt. convert.ps1 passes them per payroll,
+    # because PostgresImport always writes the same two schema names on the
+    # desktop and each payroll has to be parked separately in docker.
+    [string]$PayrollSource,
+    [string]$PayrollTarget
 )
 $ErrorActionPreference = 'Stop'
 
@@ -63,8 +68,10 @@ if (-not $DesktopDb)       { $DesktopDb       = Get-PiproSetting $cfg 'INTERIM_D
 if (-not $DesktopUser)     { $DesktopUser     = Get-PiproSetting $cfg 'INTERIM_USER' }
 if (-not $DesktopPassword) { $DesktopPassword = Get-PiproSetting $cfg 'INTERIM_PASSWORD' -AllowEmpty }
 
-$payrollSource = Get-PiproSetting $cfg 'INTERIM_PAYROLL_SCHEMA'
-$payrollTarget = Get-PiproSetting $cfg 'INTERIM_PAYROLL_TARGET'
+if (-not $PayrollSource) { $PayrollSource = Get-PiproSetting $cfg 'INTERIM_PAYROLL_SCHEMA' }
+if (-not $PayrollTarget) { $PayrollTarget = Get-PiproSetting $cfg 'INTERIM_PAYROLL_TARGET' }
+$payrollSource = $PayrollSource
+$payrollTarget = $PayrollTarget
 if ($payrollTarget -eq 'pipro') {
     Write-Host "==> INTERIM_PAYROLL_TARGET must not be 'pipro' - a schema of that name" -ForegroundColor Red
     Write-Host "    shadows 'public' for the app's own 'pipro' user and hides every tenant." -ForegroundColor Red

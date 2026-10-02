@@ -2,6 +2,9 @@
 # The example is committed; the real one holds your DB details and password.
 settings.local.txt
 
+# Per-client conversion manifest (copy payrolls.example.csv -> payrolls.csv).
+payrolls.csv
+
 # Local environment overrides — NEVER commit real DB credentials.
 .env
 .env.local
