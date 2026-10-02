@@ -27,27 +27,78 @@
 BEGIN;
 
 -- ---------------------------------------------------------------------------
--- PROMOTED ORDINALS — legacy slots that became first-class employee columns
+-- PROMOTED ORDINALS - legacy slots that became first-class employee columns
 -- during hop 1, so they are ABSENT from the alpha bank downstream BY DESIGN.
--- Without this table the diff reports 563 phantom losses on every run.
--- Verified 2026-09-17: 2421 inds + 3806 refnos = 6227 legacy rows,
--- minus 563 promoted = 5664 = exactly the interim and pipro alpha counts.
+-- Without this table the diff reports those rows as phantom losses.
+--
+-- DERIVED, NEVER HARDCODED. Which slots are promoted is CLIENT CONFIGURATION,
+-- read by SQLImport.getMoveOrdinals from pw_parm_payrollUser (EmpCategoryInd,
+-- IdRef, SexInd) plus a passport lookup - and it is PER PAYROLL, so a client
+-- with three payrolls can have three different sets. Hardcoding misreports in
+-- BOTH directions at once: the real promotions surface as `only_in_a` losses,
+-- while the wrongly-listed ordinals are silently excluded, hiding real ones.
+--
+-- Indicator pointers address bank V directly; REFNO pointers address V+100, the
+-- same offset DataDictionary applies when merging pw_inds and pw_refnos.
+-- A pointer of 0 means the client did not configure that promotion.
+--
+-- Rebuilt from scratch each run, because it describes whichever client was
+-- last staged.
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS compare.promoted_ordinal (
-    bank          CHAR(1) NOT NULL,
-    ordinal_no    INTEGER NOT NULL,
-    legacy_name   TEXT,
-    target_column TEXT NOT NULL,
-    rows_expected INTEGER,
-    PRIMARY KEY (bank, ordinal_no)
+-- employee_code is "<payroll>/<EmpNo>", so the payroll a value belongs to is
+-- recoverable from it. Returns NULL for a code that does not carry the prefix
+-- (a user who renamed theirs), which makes the promoted-ordinal match simply not
+-- apply - reporting the row as a difference rather than silently excluding it.
+CREATE OR REPLACE FUNCTION compare.code_payroll(code text) RETURNS integer
+LANGUAGE sql IMMUTABLE AS $fn$
+    SELECT CASE WHEN code ~ '^[0-9]+/' THEN split_part(code, '/', 1)::int END
+$fn$;
+
+-- CASCADE because the diff views (compare.value_diff, compare.run_value_diff)
+-- reference this table. They are recreated by 92 and 96 with CREATE OR REPLACE,
+-- which both report scripts run after this one, so the drop is safe - but a
+-- hand-written query against those views between the two steps will not find
+-- them. Re-run 92/96.
+DROP TABLE IF EXISTS compare.promoted_ordinal CASCADE;
+CREATE TABLE compare.promoted_ordinal (
+    payroll        INTEGER NOT NULL,
+    bank           CHAR(1) NOT NULL,
+    ordinal_no     INTEGER NOT NULL,
+    legacy_name    TEXT,
+    target_column  TEXT NOT NULL,
+    rows_in_legacy INTEGER,
+    PRIMARY KEY (payroll, bank, ordinal_no)
 );
 
-INSERT INTO compare.promoted_ordinal (bank, ordinal_no, legacy_name, target_column, rows_expected) VALUES
-    ('V',   1, 'indicator 1 (sex)',      'employees.gender_f22',        187),
-    ('V',   2, 'indicator 2 (category)', 'employees.category_f13',      187),
-    ('V', 101, 'ID NUMBER',              'employees.identity_f12',      187),
-    ('V', 109, 'PASSPORT REF NO',        'employees.passportnumber_f45',  2)
-ON CONFLICT (bank, ordinal_no) DO NOTHING;
+INSERT INTO compare.promoted_ordinal (payroll, bank, ordinal_no, legacy_name, target_column)
+SELECT p.payroll, 'V', p.sex_ind,
+       'indicator ' || p.sex_ind || ' (SexInd)', 'employees.gender_f22'
+  FROM compare.legacy_promoted p WHERE p.sex_ind > 0
+UNION ALL
+SELECT p.payroll, 'V', p.empcategory_ind,
+       'indicator ' || p.empcategory_ind || ' (EmpCategoryInd)', 'employees.category_f13'
+  FROM compare.legacy_promoted p WHERE p.empcategory_ind > 0
+UNION ALL
+SELECT p.payroll, 'V', p.id_ref + 100,
+       'refno ' || p.id_ref || ' (IdRef)', 'employees.identity_f12'
+  FROM compare.legacy_promoted p WHERE p.id_ref > 0
+UNION ALL
+SELECT p.payroll, 'V', p.passport_refno + 100,
+       'refno ' || p.passport_refno || ' (PassportRefNo)', 'employees.passportnumber_f45'
+  FROM compare.legacy_promoted p WHERE p.passport_refno > 0
+ON CONFLICT (payroll, bank, ordinal_no) DO NOTHING;
+
+-- How many legacy rows each promoted slot actually held. Informational, and the
+-- figure that should reappear as the alpha-bank shortfall in section 2.
+UPDATE compare.promoted_ordinal o SET rows_in_legacy = (
+    CASE WHEN o.ordinal_no >= 100
+         THEN (SELECT count(*) FROM compare.legacy_refnos r
+                JOIN compare.legacy_imf m ON m.empno = r.empno
+               WHERE r.ordinalno = o.ordinal_no - 100 AND m.payroll = o.payroll)
+         ELSE (SELECT count(*) FROM compare.legacy_inds i
+                JOIN compare.legacy_imf m ON m.empno = i.empno
+               WHERE i.ordinalno = o.ordinal_no AND m.payroll = o.payroll)
+    END);
 
 DELETE FROM compare.snapshot WHERE snap = :'snap';
 INSERT INTO compare.snapshot (snap, system, phase, source_schema)
@@ -125,10 +176,12 @@ GROUP BY bank, origin ORDER BY bank, origin;
 SELECT
     (SELECT count(*) FROM compare.employee_value WHERE snap = :'snap' AND bank='V') AS legacy_alpha_rows,
     (SELECT count(*) FROM compare.employee_value v JOIN compare.promoted_ordinal p
-       ON p.bank=v.bank AND p.ordinal_no=v.ordinal_no WHERE v.snap = :'snap')       AS promoted_rows,
+       ON p.bank=v.bank AND p.ordinal_no=v.ordinal_no
+      AND p.payroll = compare.code_payroll(v.employee_code) WHERE v.snap = :'snap') AS promoted_rows,
     (SELECT count(*) FROM compare.employee_value v WHERE v.snap = :'snap' AND v.bank='V'
         AND NOT EXISTS (SELECT 1 FROM compare.promoted_ordinal p
-                         WHERE p.bank=v.bank AND p.ordinal_no=v.ordinal_no))        AS expected_downstream;
+                         WHERE p.bank=v.bank AND p.ordinal_no=v.ordinal_no
+                           AND p.payroll = compare.code_payroll(v.employee_code)))  AS expected_downstream;
 
 \echo ''
 \echo '=== 3. RefNoCode indirection - how each ordinal resolves ==================='

@@ -57,7 +57,8 @@ $staging = @'
 CREATE SCHEMA IF NOT EXISTS compare;
 DROP TABLE IF EXISTS compare.legacy_imf, compare.legacy_amts, compare.legacy_inds,
                      compare.legacy_refnos, compare.legacy_dates,
-                     compare.legacy_parm_refnos, compare.legacy_descf;
+                     compare.legacy_parm_refnos, compare.legacy_descf,
+                     compare.legacy_promoted;
 -- payroll is staged because employee_code is qualified "<payroll>/<EmpNo>":
 -- the bare EmpNo is unique only within a payroll database.
 CREATE TABLE compare.legacy_imf    (empno INT PRIMARY KEY, payroll INT, surname TEXT, inits TEXT);
@@ -70,6 +71,12 @@ CREATE TABLE compare.legacy_dates  (empno INT, ordinalno INT, datevalue INT);
 -- looked up in PW_Descf. Both are payroll-scoped.
 CREATE TABLE compare.legacy_parm_refnos (payroll INT, ordinalno INT, refnoname TEXT, refnodescind TEXT);
 CREATE TABLE compare.legacy_descf       (payroll INT, refno INT, desccode TEXT, description TEXT);
+-- Which alpha slots this client PROMOTED to first-class employee columns during
+-- hop 1. These are CONFIGURED PER PAYROLL, not universal - SQLImport.getMoveOrdinals
+-- reads them from pw_parm_payrollUser (+ a passport lookup), so they must be
+-- derived per client, never hardcoded. 0 means "not configured".
+CREATE TABLE compare.legacy_promoted (payroll INT, empcategory_ind INT, id_ref INT,
+                                      sex_ind INT, passport_refno INT);
 '@
 Write-Host "==> Creating staging tables..." -ForegroundColor Cyan
 $staging | docker @PG -v ON_ERROR_STOP=on | Out-Null
@@ -92,7 +99,14 @@ $extracts = @(
     @{ Table = 'compare.legacy_parm_refnos'; Cols = 'payroll, ordinalno, refnoname, refnodescind';
        Query = "SELECT Payroll, OrdinalNo, ISNULL(RefNoName,''), ISNULL(RefNoDescInd,'') FROM PW_Parm_RefNoNames" },
     @{ Table = 'compare.legacy_descf'; Cols = 'payroll, refno, desccode, description';
-       Query = "SELECT Payroll, RefNo, ISNULL(DescCode,''), ISNULL(Description,'') FROM PW_Descf" }
+       Query = "SELECT Payroll, RefNo, ISNULL(DescCode,''), ISNULL(Description,'') FROM PW_Descf" },
+    # Mirrors SQLImport.getMoveOrdinals exactly - that java is the authority for
+    # which slots were promoted, so this query is a copy of its two, not a guess.
+    @{ Table = 'compare.legacy_promoted'; Cols = 'payroll, empcategory_ind, id_ref, sex_ind, passport_refno';
+       Query = "SELECT u.Payroll, ISNULL(u.EmpCategoryInd,0), ISNULL(u.IdRef,0), ISNULL(u.SexInd,0), " +
+               "ISNULL(COALESCE((SELECT PassportRefNo FROM PW_Parm_Irp5NonFinancial f JOIN PW_Parm_RefNoNames r ON r.OrdinalNo = f.PassportRefNo), " +
+               "(SELECT OrdinalNo FROM PW_Parm_RefNoNames WHERE RefNoName LIKE '%passport%' GROUP BY OrdinalNo HAVING COUNT(*) = 1)), 0) " +
+               "FROM PW_Parm_PayrollUser u" }
 )
 
 $tmp = Join-Path $env:TEMP "pipro-legacy-export"

@@ -108,6 +108,24 @@ FROM      :"legacy_company_schema".employees a
 FULL JOIN :"tenant_schema".employees        t
        ON btrim(t.employee_code) = btrim(a.payroll_f04::text || '/' || a.employeeid_f01);
 
+-- legacy_empno is filled HERE, not only by 93. In compare_report, 93 runs first
+-- (inside export-legacy) and this script then rebuilds the map from scratch - so
+-- anything 93 backfilled was deleted immediately afterwards and the column read
+-- "0 resolved" on every single run. Both scripts compute the same value, so
+-- whichever runs last is correct; this one makes the common order correct.
+--
+-- The empty-table create is so the UPDATE can be unconditional: 90 is allowed to
+-- run before any legacy export has staged PW_IMF. export-legacy DROPs and
+-- recreates this table with the same shape, so seeding it empty costs nothing.
+CREATE TABLE IF NOT EXISTS compare.legacy_imf
+    (empno INT PRIMARY KEY, payroll INT, surname TEXT, inits TEXT);
+
+UPDATE compare.employee_map m
+   SET legacy_empno = l.empno::text
+  FROM compare.legacy_imf l
+ WHERE m.tenant_schema = :'tenant_schema'
+   AND btrim(m.employee_code) = btrim(l.payroll::text || '/' || l.empno::text);
+
 COMMIT;
 
 -- ===========================================================================
@@ -161,9 +179,13 @@ ORDER BY employeeno;
 -- If coincide < total, any query joining 'emp-' || <legacy EmpNo> is SILENTLY
 -- MISMATCHING rows. compare.july_diff does exactly that and survives only
 -- because this client scores 100%. Never propagate that join; use this map.
+--
+-- The comparison is against the EMPLOYEE part of employee_code, not the whole
+-- string: the code is qualified "<payroll>/<EmpNo>", so comparing the surrogate
+-- to all of it would read 57 <> '1/57' and report BROKEN for every row.
 SELECT count(*) AS total,
-       count(*) FILTER (WHERE interim_empno::text = employee_code) AS coincide,
-       CASE WHEN count(*) = count(*) FILTER (WHERE interim_empno::text = employee_code)
+       count(*) FILTER (WHERE interim_empno::text = split_part(employee_code, '/', 2)) AS coincide,
+       CASE WHEN count(*) = count(*) FILTER (WHERE interim_empno::text = split_part(employee_code, '/', 2))
             THEN 'coincidence holds — legacy-keyed joins happen to work HERE'
             ELSE 'BROKEN — legacy-keyed joins are mismatching rows; use the map'
        END AS verdict

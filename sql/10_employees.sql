@@ -112,14 +112,22 @@ END $$;
 -- the legacy EmployeeNo. (This TEXT id is used only by hrm self-refs like
 -- manager_id; the PAYROLL domain keys on user_id — see identity note.)
 -- ---------------------------------------------------------------------------
+-- NO email column here. hrm-core migration 2026_09_09_100000_employees_drop_email
+-- removed it: an address belongs to the PERSON, so it lives on
+-- pipro_core_users.email (UNIQUE) and employees.email was a second copy of the
+-- same value, free to drift. The UNIQUE on the employment table also blocked the
+-- re-engagement pattern legacy depends on - terminate the employment and open a
+-- NEW one for the same person, each with its own YTD ledger and tax certificate -
+-- because a re-engaged person keeps their address. The synthesised address above
+-- is still used, but only for the user row minted in step 2.
 INSERT INTO employees (
-    id, user_id, employee_code, first_name, last_name, email, id_number,
+    id, user_id, employee_code, first_name, last_name, id_number,
     hired_at, terminated_at, salary_current_minor, currency, created_at,
     date_of_birth, gender, title, nationality_country_code, marital_status, preferred_name,
     occupation, category)
 SELECT
     'emp-' || s.legacy_empno, m.user_id, s.employee_code, s.first_name, s.last_name,
-    s.email, s.id_number, s.hired_at, s.terminated_at, 0, s.currency,   -- salary display set by 20_recurring
+    s.id_number, s.hired_at, s.terminated_at, 0, s.currency,   -- salary display set by 20_recurring
     :'cutover', s.date_of_birth, s.gender, s.title, s.nationality_country_code,
     s.marital_status, NULL, s.occupation, s.category
 FROM _src s JOIN _idmap m ON m.legacy_empno = s.legacy_empno

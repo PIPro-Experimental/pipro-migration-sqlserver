@@ -41,8 +41,8 @@ SELECT set_config('pipro.reset_tenant',  :'tenant_schema', false),
 
 DO $$
 DECLARE
-    tenant  text := current_setting('pipro.reset_tenant');
-    confirm text := current_setting('pipro.reset_confirm');
+    target_schema text := current_setting('pipro.reset_tenant');
+    confirm       text := current_setting('pipro.reset_confirm');
     -- Tenant configuration: provisioning + country-pack seed. Nothing here is
     -- employee-scoped and nothing here comes from legacy.
     keep    text[] := ARRAY[
@@ -61,23 +61,23 @@ DECLARE
     minted  bigint[];
 BEGIN
     IF confirm IS DISTINCT FROM 'RESET' THEN
-        RAISE EXCEPTION 'Refusing to reset %: pass -v confirm=RESET to mean it.', tenant;
+        RAISE EXCEPTION 'Refusing to reset %: pass -v confirm=RESET to mean it.', target_schema;
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = tenant) THEN
-        RAISE EXCEPTION 'No such tenant schema: %', tenant;
+    IF NOT EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = target_schema) THEN
+        RAISE EXCEPTION 'No such tenant schema: %', target_schema;
     END IF;
 
     -- Capture this tenant's employee user_ids BEFORE truncating. The minted users
     -- live in the shared public.pipro_core_users, so they must be identified by
     -- THIS tenant's employees - not by "has no tenant access", which would reach
     -- into other tenants' minted users too.
-    EXECUTE format('SELECT array_agg(DISTINCT user_id) FROM %I.employees WHERE user_id IS NOT NULL', tenant)
+    EXECUTE format('SELECT array_agg(DISTINCT user_id) FROM %I.employees WHERE user_id IS NOT NULL', target_schema)
        INTO minted;
 
     FOR r IN
         SELECT table_name FROM information_schema.tables
-         WHERE table_schema = tenant AND table_type = 'BASE TABLE'
+         WHERE table_schema = target_schema AND table_type = 'BASE TABLE'
          ORDER BY table_name
     LOOP
         IF r.table_name = ANY(keep) THEN
@@ -86,11 +86,11 @@ BEGIN
         END IF;
         -- CASCADE because the tenant tables reference each other; RESTART IDENTITY
         -- so re-imported rows get the same ids they would in a fresh tenant.
-        EXECUTE format('TRUNCATE TABLE %I.%I RESTART IDENTITY CASCADE', tenant, r.table_name);
+        EXECUTE format('TRUNCATE TABLE %I.%I RESTART IDENTITY CASCADE', target_schema, r.table_name);
         cleared := cleared + 1;
     END LOOP;
 
-    RAISE NOTICE 'Tenant %: % tables cleared, % configuration tables kept.', tenant, cleared, kept;
+    RAISE NOTICE 'Tenant %: % tables cleared, % configuration tables kept.', target_schema, cleared, kept;
 
     -- Only users this tenant's employees pointed at, and only those carrying the
     -- unusable password 10_employees mints them with - so a real operator account
@@ -102,14 +102,17 @@ BEGIN
     RAISE NOTICE 'Removed % minted login users.', n;
 
     -- Migration staging for this tenant only; other tenants keep theirs.
-    -- The column MUST be qualified: 'tenant' is also the plpgsql variable above,
-    -- and unqualified plpgsql would substitute the variable on both sides, making
-    -- the predicate always true and wiping every tenant's staging rows.
-    DELETE FROM migration.ytd_takeon y WHERE y.tenant = tenant;
+    -- The plpgsql variable is deliberately NOT called 'tenant': these tables have
+    -- a column of that name, and plpgsql resolves a bare identifier as the
+    -- VARIABLE - so 'WHERE tenant = tenant' is always true and would wipe every
+    -- tenant's staging rows. Qualifying only the left side does not help either:
+    -- the right side stays ambiguous and plpgsql refuses to guess. Renaming the
+    -- variable removes the clash instead of working around it.
+    DELETE FROM migration.ytd_takeon WHERE tenant = target_schema;
     GET DIAGNOSTICS n = ROW_COUNT;
     RAISE NOTICE 'Removed % ytd_takeon staging rows.', n;
 
-    DELETE FROM migration.amount_quarantine q WHERE q.tenant = tenant;
+    DELETE FROM migration.amount_quarantine WHERE tenant = target_schema;
     GET DIAGNOSTICS n = ROW_COUNT;
     RAISE NOTICE 'Removed % quarantined amount rows.', n;
 END $$;

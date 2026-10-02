@@ -21,6 +21,15 @@
 -- ===========================================================================
 \set ON_ERROR_STOP on
 
+-- employee_code is "<payroll>/<EmpNo>", so the payroll a value belongs to is
+-- recoverable from it. Returns NULL for a code that does not carry the prefix
+-- (a user who renamed theirs), which makes the promoted-ordinal match simply not
+-- apply - reporting the row as a difference rather than silently excluding it.
+CREATE OR REPLACE FUNCTION compare.code_payroll(code text) RETURNS integer
+LANGUAGE sql IMMUTABLE AS $fn$
+    SELECT CASE WHEN code ~ '^[0-9]+/' THEN split_part(code, '/', 1)::int END
+$fn$;
+
 CREATE OR REPLACE VIEW compare.value_diff AS
 SELECT
     COALESCE(a.snap, '(absent)')          AS snap_a,
@@ -41,7 +50,8 @@ SELECT
         -- a loss — otherwise every run reports 563 phantom missing values.
         WHEN EXISTS (SELECT 1 FROM compare.promoted_ordinal p
                       WHERE p.bank = COALESCE(a.bank, b.bank)
-                        AND p.ordinal_no = COALESCE(a.ordinal_no, b.ordinal_no))
+                        AND p.ordinal_no = COALESCE(a.ordinal_no, b.ordinal_no)
+                        AND p.payroll = compare.code_payroll(COALESCE(a.employee_code, b.employee_code)))
              AND (a.snap IS NULL OR b.snap IS NULL) THEN 'promoted'
         WHEN a.snap IS NULL THEN 'only_in_b'
         WHEN b.snap IS NULL THEN 'only_in_a'
