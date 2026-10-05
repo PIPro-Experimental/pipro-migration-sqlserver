@@ -9,6 +9,26 @@ Treat them as a *shape*, not a target. A different client has different employee
 counts, a different code catalogue and different promoted ordinals. What should
 carry over is the **relationships** between the numbers, listed at the bottom.
 
+## Read this before using anything here as a precedent
+
+Paywell is a **configurable** payroll engine. Two clients can meet the same pay
+requirement with two entirely different implementations — different ordinals,
+different banks, different calc programs — and both are "how it works" for that
+client only. One of them may be **objectively wrong**, and a long-standing
+configuration is not evidence that it is right: it only means nobody has
+disputed it yet.
+
+So nothing in this file, and nothing recovered by `tools/parse-trace.js`, is a
+specification for how pipro should behave. It is a description of what ONE
+client's configuration did on ONE run. The airplane birthday bonus below is a
+13th cheque pro-rated over days worked, gated on birth month; that is this
+client's answer, not the right answer, and reproducing it in pipro for anyone
+else would be porting a local decision as though it were a rule.
+
+The migration's job is to reproduce each client's own numbers, and to be able to
+SAY which rule produced them. Deciding whether a rule is correct is a separate
+conversation with the client who configured it.
+
 ## The client
 
 | | |
@@ -110,22 +130,103 @@ Legacy, from `PW_Runf*` / `PW_T_Runf*` — the engine's own output, not
 The two families sit on **different periods** — live was June, validation July —
 which is why the report prints both sides' period before anything else.
 
-Last period-matched comparison (legacy validation vs pipro previews, both July):
+Last period-matched comparison (legacy validation vs pipro previews, both July),
+re-measured 2026-10-05 from `compare.run_total`:
 
-| Metric | Legacy | pipro | Employees differing |
-|---|---|---|---|
-| gross | 6,386,148.98 | 6,373,609.36 | 5 |
-| net | 4,825,126.70 | 4,948,835.21 | 154 |
-| paye | 1,512,744.79 | — | 150 |
+| Metric | Legacy | pipro | Comparable | Employees differing | Gap |
+|---|---|---|---|---|---|
+| gross | 6,386,148.98 | 6,341,609.36 | 170 | 13 | +44,539.62 |
+| net | 4,825,126.70 | 4,916,835.21 | 170 | 162 | −91,708.51 |
+| paye | 1,512,744.79 | — | 0 | — | — |
 
-The 154 net differences are the **YTD gap** — `migration.ytd_takeon` is staged but
-not materialised into `cumulative_ledger`. The same 154 appeared in the August
-reconciliation, independently reproduced. Of the 5 gross differences, employee
-168's is exactly 7,075.07, a legacy run-time manual capture deliberately not
-reproduced in pipro.
+An earlier revision of this file recorded pipro's gross as 6,373,609.36 and net
+as 4,948,835.21 — both exactly 32,000 too high. Those were the figures pipro
+WOULD have produced had the bursary rule existed (the gross one is therefore
+identical to legacy's own b/f gross), not the figures it did produce. Only one
+pipro run has ever existed (`payroll_runs` id 1, what_if, finished
+2026-10-02T16:12:25Z, 170 processed / 17 skipped), it holds 170 previews all at
+status `calculated`, and no status filter yields the higher numbers. The table
+above is what the database says.
+
+**PAYE is not comparable at all in a validation run**, and this is structural,
+not a defect: `payslip_core_previews` carries `gross_minor` and `net_minor` and
+no PAYE column, so the pipro side contributes zero PAYE rows against legacy's
+150. Only a live run on both sides can compare it.
+
+The 162 net differences are the **YTD gap** — `migration.ytd_takeon` is staged
+but never materialised into `cumulative_ledger`, so pipro taxes as though every
+employee started fresh in July. Net is the one metric where pipro is HIGHER.
+
+### The gross gap decomposes exactly, with no residual
+
+Confirmed two ways: per-employee from `compare.run_total`, and against legacy's
+own PAY121 control report ordinal totals.
+
+| Cause | Legacy ordinal | Employees | Amount | What it is |
+|---|---|---|---|---|
+| Bursary stipend | 116 `pay bursary adv` | 8 | 32,000.00 | missing calc rule |
+| Birthday bonus | 063 `birthday bonus` | 1 (1/168) | 7,075.07 | missing calc rule |
+| Commission | 044 `PAY-COMMISSION` | 3 | 3,350.00 | period input pipro never had |
+| Overtime | 055 `PAY-O/T 1.50` | 1 (1/180) | 2,114.55 | period input pipro never had |
+| | | **13** | **44,539.62** | |
+
+The last two are **not defects**. Legacy captured them during the run (ordinal
+054 `HRS-O/T 1.50` = 10 hours); nothing fed them to pipro, so producing nothing
+is correct.
+
+The first two are missing rules, and in the bursary's case the INPUT imported
+perfectly — ordinal 115 `BURSARY ADV AMT` holds 8 rows totalling 32,000.00
+identically in legacy, interim and pipro. Because its codetype is `S` it routes
+to `employee_amount_deprecated`, which is defensible (legacy separates the
+stored amount at 115 from the payment at 116). But note the shape of the
+failure: a live calc INPUT sitting in a table named `deprecated`, feeding
+nothing, with no error raised. Any client ordinal used that way goes the same
+silent route.
 
 Totals are 4dp because legacy `Amt` is a **float** — 16,195.62 is physically
 stored as 16195.619999999999, rounded to 4 on capture.
+
+## Rules are not data, and the trace is where the rules are
+
+`pw_*` carries the values a payroll holds. It does not carry the rules that
+produce them — those live in the calc program, which has no readable source
+(the VB6 at `repos/legacy-vb6` is six years stale and interprets the program
+rather than listing it). This is why the two missing rules above were invisible
+to every value-level check: the inputs were all present and correct.
+
+A **validation run can print a trace**, and the trace is the program as
+executed: opcode, operands, banks, literals, jump targets and the value each
+step produced. Legacy reports are PDFs but offer a CSV export, which parses —
+see `tools/parse-trace.js`. On this run: 96,303 rows, 93,772 instructions,
+2,531 continuation lines, 187 employees, 731 distinct instructions, 0 unparsed.
+
+Both missing rules were specified from it:
+
+```
+bursary    calc  736  MOV  C 0115 (BURSARY ADV AMT) -> C 0116 (pay bursary adv)
+                       fires for exactly the 8 employees in the gap, 4000 each
+
+birthday   calc  683  MOM  D 0930 (Birth Date)        -> R 0030   = 7
+           calc  684  ADD  L 0002 + C 0391 (tax period 5) -> R 0029 = 7
+           calc  685  NEQ  R 0029 vs R 0030            -> jump 692 if not birth month
+           calc  686  MOV  C 0030 -> C 0063            annual amount (= budget / 13)
+           calc  693  EQ   C 0349 (ytd-dys wkd) vs 365 -> jump 696 if full year
+           calc  694  DIV  C 0063 / 365                -> 47.1671233
+           calc  695  MUL  x C 0349 (150 days)         -> C 0063 = 7075.07
+```
+
+Both reproduce legacy to the cent. Note calc 684: **the engine computes calendar
+month as tax period + 2**, which is the March-start tax year stated outright
+rather than inferred — though a naive `+2` yields 13 and 14 for January and
+February, so a branch a July trace cannot show must handle those.
+
+Two limits, both load-bearing:
+
+- **A trace is not a listing.** Only paths actually taken appear. 676 calc
+  numbers executed out of a range reaching 1446, so roughly half this program
+  never ran, and any rule that fires in another month is absent.
+- It describes **this client's configuration**. See the warning at the top of
+  this file before treating any of it as a precedent.
 
 ## What should carry over to a new client
 
@@ -138,3 +239,11 @@ The counts will all differ. These relationships should not:
   orphan minted users, `legacy_empno` resolved for every row
 - master-data diff: nothing under `value_differs`, `only_in_a` or `only_in_b`
 - run comparison: both sides on the **same period** before any figure is read
+- the gross gap **decomposes to named ordinals with no residual**. Every
+  remaining cent is either a period input pipro was never given or a calc rule
+  that does not exist yet — and the trace says which. An unexplained remainder
+  means the comparison is not finished, not that the engines nearly agree.
+- a **value-level match does not mean a correct payslip**. Every input to the
+  bursary was present and identical in all three systems while 8 employees were
+  paid nothing. Master-data parity proves the import; only a run comparison
+  proves the payroll.
