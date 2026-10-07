@@ -39,6 +39,12 @@
 //     illustration of the step; it is not the rule.
 //   * A conditional's jump target is captured, but the instructions it skips
 //     are only visible through an employee who did not skip them.
+//   * THE EXPORT DROPS MINUS SIGNS. Every value is a magnitude: the airplane
+//     trace holds no negative number in 96k rows, yet calc 548 (SUB) prints
+//     80844 - 327002 as 246158, and calc 75 (REM) prints legacy's -0.04 as
+//     0.04. The sign is lost in the export, not here, so it can't be recovered
+//     from the CSV - re-derive it from the opcode and operands before
+//     comparing a trace value against the engine.
 //   * Field offsets are fixed because the export's page furniture is a fixed
 //     width. They are VALIDATED on every row: anything not matching one of the
 //     two known record shapes is counted and reported, never silently dropped.
