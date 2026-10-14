@@ -17,6 +17,10 @@
              names, so the next PostgresImport run cannot overwrite them
            - VERIFIES the payroll number in the data matches what the manifest
              declared
+      4b. Compares the payrolls' employee-data definitions (amount codes, dates,
+          indicators, registers). If they differ, the largest payroll is imported in
+          full and the others bring in their employees only - after a warning and
+          your typed confirmation.
       5. Seeds migration_map from the manifest.
       6. Runs the import chain (run-migration.ps1) for every mapped payroll.
 
@@ -177,11 +181,75 @@ foreach ($r in $current) {
     Write-Host "    payroll number $found confirmed against the data." -ForegroundColor Green
 }
 
+# --- 4b. Do the payrolls share one set of employee-data definitions? -------------
+# A tenant holds ONE catalogue of user-defined employee data (amount codes, dates,
+# indicators, precision amounts), but every legacy payroll database had its own
+# PW_Parm_Codes and friends. If they differ, the payrolls cannot all be imported in
+# full: code 40 would mean "basic salary" in one and something else in another. Then
+# the payroll with the most employees is imported in full and the others bring in
+# their employees only, with a warning. The client will usually say what they really
+# want and the conversion is redone from scratch.
+$catalogues = @(
+    @{ Name = 'amount codes (PW_Parm_Codes)';      Table = 'settings_employee_amounts';
+       Cols = "ordinalno, upper(btrim(coalesce(description,''))), upper(btrim(coalesce(codetype,''))), upper(btrim(coalesce(taxtype,''))), upper(btrim(coalesce(taxincasn,'')))" },
+    @{ Name = 'employee dates';                    Table = 'settings_employee_dates';
+       Cols = "ordinalno, upper(btrim(coalesce(description,'')))" },
+    @{ Name = 'indicators / alpha fields';         Table = 'settings_employee_alpha';
+       Cols = "ordinalno, upper(btrim(coalesce(alphaname,'')))" },
+    @{ Name = 'employee registers (precision)';    Table = 'settings_employee_precision_amounts';
+       Cols = "ordinalno, upper(btrim(coalesce(description,''))), upper(btrim(coalesce(codetype,'')))" }
+)
+foreach ($r in $current) {
+    $r | Add-Member -NotePropertyName scope -NotePropertyValue 'full' -Force
+    $r | Add-Member -NotePropertyName employees -NotePropertyValue ([int](Invoke-Psql "SELECT count(*) FROM $($r.company_schema).employees")) -Force
+}
+if ($current.Count -gt 1) {
+    $base = $current | Sort-Object -Property employees -Descending | Select-Object -First 1
+    Write-Host ""
+    Write-Host "==> Comparing employee-data definitions against '$($base.source_db)' ($($base.employees) employees, the largest)..." -ForegroundColor Cyan
+    $incompatible = @()
+    foreach ($r in $current) {
+        if ($r -eq $base) { continue }
+        $diffs = @()
+        foreach ($c in $catalogues) {
+            $n = Invoke-Psql @"
+SELECT count(*) FROM (
+    (SELECT $($c.Cols) FROM $($r.company_schema).$($c.Table) EXCEPT SELECT $($c.Cols) FROM $($base.company_schema).$($c.Table))
+    UNION ALL
+    (SELECT $($c.Cols) FROM $($base.company_schema).$($c.Table) EXCEPT SELECT $($c.Cols) FROM $($r.company_schema).$($c.Table))
+) x
+"@
+            if ([int]$n -gt 0) { $diffs += "$($c.Name): $([int]$n) definitions differ" }
+        }
+        if ($diffs.Count -gt 0) {
+            $r.scope = 'employees'
+            $incompatible += $r
+            Write-Host "    $($r.source_db): DIFFERENT" -ForegroundColor Yellow
+            foreach ($d in $diffs) { Write-Host "        $d" -ForegroundColor Yellow }
+        } else {
+            Write-Host "    $($r.source_db): same definitions - imported in full" -ForegroundColor Green
+        }
+    }
+    if ($incompatible.Count -gt 0) {
+        Write-Host ""
+        Write-Host "---------------------------------------------------------------------------" -ForegroundColor Yellow
+        Write-Host " WARNING: the payrolls do not share one set of employee-data definitions." -ForegroundColor Yellow
+        Write-Host " '$($base.source_db)' will be imported in FULL. These bring in their EMPLOYEES" -ForegroundColor Yellow
+        Write-Host " ONLY (no amounts, dates, indicators, history, settings, calc program or" -ForegroundColor Yellow
+        Write-Host " calendar), because their codes mean different things:" -ForegroundColor Yellow
+        foreach ($r in $incompatible) { Write-Host "     - $($r.source_db) -> payroll $($r.target_payroll_id)" -ForegroundColor Yellow }
+        Write-Host " Ask the client how they want the definitions merged, then redo the" -ForegroundColor Yellow
+        Write-Host " conversion from scratch." -ForegroundColor Yellow
+        Write-Host "---------------------------------------------------------------------------" -ForegroundColor Yellow
+        Confirm-Step "Import '$($base.source_db)' in full and the others as employees only?" -Expect 'EMPLOYEES'
+    }
+}
+
 # --- 5. Seed migration_map -------------------------------------------------------
 Write-Host ""
 Write-Host "==> Seeding migration_map from the manifest..." -ForegroundColor Cyan
 $values = ($current | ForEach-Object {
-    "('$($_.company_schema)','$($_.payroll_schema)','$($_.tenant_slug)',$($_.target_payroll_id),$($_.legacy_payroll_number))"
+    "('$($_.company_schema)','$($_.payroll_schema)','$($_.tenant_slug)',$($_.target_payroll_id),$($_.legacy_payroll_number),'$($_.scope)')"
 }) -join ",`n    "
 Invoke-Psql @"
 CREATE TABLE IF NOT EXISTS migration_map (
@@ -190,17 +258,21 @@ CREATE TABLE IF NOT EXISTS migration_map (
     tenant_slug           TEXT NOT NULL,
     target_payroll_id     INTEGER NOT NULL,
     legacy_payroll_number INTEGER NOT NULL DEFAULT 1);
+ALTER TABLE migration_map ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'full';
 DELETE FROM migration_map WHERE tenant_slug = '$TenantSlug';
-INSERT INTO migration_map (legacy_company_schema, legacy_payroll_schema, tenant_slug, target_payroll_id, legacy_payroll_number) VALUES
+INSERT INTO migration_map (legacy_company_schema, legacy_payroll_schema, tenant_slug, target_payroll_id, legacy_payroll_number, scope) VALUES
     $values;
 "@ -Quiet
-Invoke-Psql "SELECT legacy_company_schema || ' + ' || legacy_payroll_schema || ' -> ' || tenant_slug || ' payroll ' || target_payroll_id FROM migration_map WHERE tenant_slug = '$TenantSlug' ORDER BY target_payroll_id" |
+Invoke-Psql "SELECT legacy_company_schema || ' + ' || legacy_payroll_schema || ' -> ' || tenant_slug || ' payroll ' || target_payroll_id || ' (' || scope || ')' FROM migration_map WHERE tenant_slug = '$TenantSlug' ORDER BY target_payroll_id" |
     ForEach-Object { if ($_) { Write-Host "    $_" -ForegroundColor DarkGray } }
 
 Confirm-Step "Run the import chain for these payroll(s)?"
 
 # --- 6. The import chain ---------------------------------------------------------
-& (Join-Path $PSScriptRoot 'run-migration.ps1')
+# -SkipMapLoad: run-migration.ps1 otherwise reloads sql/00_migration_map.sql, which
+# drops the map and re-seeds the single-payroll rehearsal row, discarding the rows
+# just seeded from the manifest.
+& (Join-Path $PSScriptRoot 'run-migration.ps1') -TenantSlug $TenantSlug -SkipMapLoad
 if ($LASTEXITCODE -ne 0) { Write-Host "==> Import chain failed." -ForegroundColor Red; exit 1 }
 
 Write-Host ""

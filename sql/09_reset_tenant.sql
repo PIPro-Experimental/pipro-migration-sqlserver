@@ -92,6 +92,15 @@ BEGIN
 
     RAISE NOTICE 'Tenant %: % tables cleared, % configuration tables kept.', target_schema, cleared, kept;
 
+    -- calc_program is kept for the country pack's own program, but the client's IMPORTED
+    -- legacy programs (57_calc_program, program_key 'legacy:payroll-<id>') are import
+    -- data like any other: purge them, or 57 would see one already there and skip the
+    -- fresh import. A program promoted to 'payroll-<id>' after cutover is the live
+    -- program, edited in pipro, and is deliberately left alone.
+    EXECUTE format('DELETE FROM %I.calc_program WHERE program_key LIKE %L', target_schema, 'legacy:%');
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RAISE NOTICE 'Removed % imported legacy calc program lines.', n;
+
     -- Only users this tenant's employees pointed at, and only those carrying the
     -- unusable password 10_employees mints them with - so a real operator account
     -- that happens to also be an employee, and the seeded demo users, survive.

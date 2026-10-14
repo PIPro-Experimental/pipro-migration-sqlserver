@@ -137,6 +137,18 @@ the seven configuration tables provisioning created.
 
 It resets **the tenant**, so for a multi-payroll client it runs **once**, before
 the first payroll — not per payroll, or each one would wipe its predecessors.
+`reset_tenant.cmd` runs it on its own; it also purges the client's imported legacy
+calc program (`calc_program` `legacy:*`), which 57 would otherwise skip over.
+
+**Payrolls whose employee-data definitions differ** (owner, 2026-10-13). A tenant
+holds one catalogue of user-defined employee data, but each legacy payroll had its
+own `PW_Parm_Codes` (and date, indicator and register definitions). After the
+payrolls are parked, `convert.ps1` compares the four catalogues against the payroll
+with the most employees. A payroll that matches is imported in full; one that does
+not brings in its **employees only** (`migration_map.scope = 'employees'`:
+`run-migration.ps1` runs `10_employees` and nothing that depends on the codes),
+after a warning and a typed confirmation. The client then says how they want the
+definitions merged, and the conversion is redone from scratch.
 
 ---
 

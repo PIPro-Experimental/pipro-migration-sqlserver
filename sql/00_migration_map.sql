@@ -21,9 +21,13 @@ CREATE TABLE migration_map (
     legacy_payroll_schema TEXT NOT NULL,     -- interim SchemaType.PAYROLL schema in the docker DB
     tenant_slug           TEXT NOT NULL,     -- target: writes into tenant_<slug> (must already exist)
     target_payroll_id     INTEGER NOT NULL,  -- target: tenant_<slug>.payrolls.id (must already exist)
-    legacy_payroll_number INTEGER NOT NULL DEFAULT 1  -- the interim Payroll number; fills the payroll
+    legacy_payroll_number INTEGER NOT NULL DEFAULT 1,  -- the interim Payroll number; fills the payroll
                                              -- scoping column on carried SchemaType.PAYROLL tables
                                              -- that had none (55_legacy_carry)
+    scope                 TEXT NOT NULL DEFAULT 'full'  -- 'full', or 'employees' when this payroll's
+                                             -- employee-data definitions differ from the largest
+                                             -- payroll's (convert.ps1 decides; run-migration then
+                                             -- runs 10_employees only)
 );
 
 -- Live mapping (verified: interim payroll number = 1 everywhere, single
