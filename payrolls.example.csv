@@ -12,13 +12,13 @@
 #                          PostgresImport at. Recorded so the log says which
 #                          backup produced which schemas; nothing connects to it
 #                          from here.
-#   company_schema         where this payroll's interim COMPANY schema is parked
-#   payroll_schema         ... and its PAYROLL schema, in the docker Postgres.
-#                          Both must be UNIQUE across the manifest: PostgresImport
-#                          always writes the same two schema names on the desktop,
-#                          so each payroll is renamed on the way into docker or the
-#                          next run overwrites the last. Never use 'pipro' for the
-#                          payroll one - it shadows 'public' for the app's own user.
+#   company_schema         the schema PostgresImport writes this payroll's COMPANY
+#   payroll_schema         ... and PAYROLL tables to; the same name on the desktop
+#                          and in docker. They may be the SAME schema (one schema
+#                          per payroll - the table names never overlap), but no
+#                          schema may appear in two rows: PostgresImport drops and
+#                          recreates its schemas on every run. Never use 'pipro' -
+#                          it shadows 'public' for the app's own database user.
 #   tenant_slug            target tenant (tenant_<slug>), already provisioned
 #   target_payroll_id      target payrolls.id in that tenant, already created
 #   legacy_payroll_number  the interim/legacy Payroll number. VERIFIED against the

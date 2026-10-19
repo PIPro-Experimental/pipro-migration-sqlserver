@@ -7,7 +7,8 @@
 -- destinations per employee with split-pay routing. ordinal_no carries the
 -- slot number; the bitemporal columns are stamped with :cutover.
 --
--- Runner variables: :legacy_company_schema :tenant_schema :cutover :system_user_id
+-- Runner variables: :legacy_company_schema :tenant_schema :payroll_number
+--                   :cutover :system_user_id
 --
 -- CONFIRM: account_type receives the RAW legacy DestinAccountType code (the
 --          CHECK was dropped for exactly this); mapping raw codes to
@@ -40,7 +41,9 @@ SELECT
     s.accountiban_g9,
     :'cutover', :'cutover', :system_user_id
 FROM :"legacy_company_schema".employee_accounts s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+-- via employee_code, as 10 builds it (EmployeeNo is unique only per payroll)
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 WHERE NOT EXISTS (                                          -- idempotency: skip already-carried slots
     SELECT 1 FROM employee_bank_details b
      WHERE b.employee_id = e.user_id AND b.ordinal_no = s.ordinalno);

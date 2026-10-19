@@ -6,7 +6,7 @@
 --                    → employee_status_history        (payable gate)
 --
 -- Runner variables: :legacy_company_schema :legacy_payroll_schema
---                   :tenant_schema :target_payroll_id
+--                   :tenant_schema :target_payroll_id :payroll_number
 --                   :cutover :system_user_id     (see run-migration.ps1)
 --
 -- Target columns/types are VERBATIM from the live schema (real). Source column
@@ -26,6 +26,59 @@
 \set ON_ERROR_STOP on
 BEGIN;
 SET search_path TO :"tenant_schema", public;
+
+-- ---------------------------------------------------------------------------
+-- Step 0: who keeps a SHARED real email address.
+-- pipro_core_users.email is UNIQUE across the installation, but legacy let
+-- several employees carry the same F40 address - the same person on two payrolls,
+-- or two people sharing one. Owner rule (2026-10-19): among ALL employees of ALL
+-- this tenant's payrolls holding an address, ONE keeps it - active before
+-- terminated, then the most recently terminated, then the most recent
+-- engagement (payroll number, then EmpNo, only to make it deterministic). Every
+-- other copy gets the synthesised placeholder below, as does an address some
+-- login outside this import already holds. Ranked across every migration_map
+-- schema of the tenant, so each payroll's run picks the same winner.
+-- ---------------------------------------------------------------------------
+SELECT set_config('mig.tenant_schema', :'tenant_schema', true),
+       set_config('mig.legacy_company_schema', :'legacy_company_schema', true),
+       set_config('mig.payroll_number', :'payroll_number', true),
+       set_config('mig.cutover', :'cutover', true) \g /dev/null
+
+CREATE TEMP TABLE _email_holder (
+    payroll_number INTEGER, empno TEXT, email_norm TEXT,
+    active BOOLEAN, terminated_at DATE, hired_at DATE) ON COMMIT DROP;
+
+DO $$
+DECLARE m record;
+BEGIN
+  FOR m IN
+    SELECT legacy_company_schema AS s, legacy_payroll_number AS p
+    FROM public.migration_map
+    WHERE 'tenant_' || tenant_slug = current_setting('mig.tenant_schema')
+    UNION   -- the schema being loaded, even if the map does not list it
+    SELECT current_setting('mig.legacy_company_schema'), current_setting('mig.payroll_number')::int
+  LOOP
+    EXECUTE format($q$
+      INSERT INTO _email_holder
+      SELECT $1, e.employeeid_f01::text, lower(btrim(e.emailaddress_f40)),
+             d.term IS NULL OR d.term > $2::date, d.term, NULLIF(e.engagedate_d931::text, '')::date
+      FROM %I.employees e
+      CROSS JOIN LATERAL (SELECT NULLIF(e.dischargedate_d932::text, '')::date AS term) d
+      WHERE btrim(COALESCE(e.emailaddress_f40, '')) <> ''$q$, m.s)
+    USING m.p, left(current_setting('mig.cutover'), 10);
+  END LOOP;
+END $$;
+
+CREATE TEMP TABLE _email_keep ON COMMIT DROP AS
+SELECT DISTINCT ON (email_norm) email_norm, payroll_number, empno
+FROM _email_holder
+ORDER BY email_norm, active DESC, terminated_at DESC NULLS FIRST, hired_at DESC NULLS LAST, payroll_number, empno;
+
+CREATE SCHEMA IF NOT EXISTS migration;
+CREATE TABLE IF NOT EXISTS migration.email_replaced (
+    tenant TEXT NOT NULL, employee_code TEXT NOT NULL, email TEXT NOT NULL,
+    reason TEXT NOT NULL, kept_by TEXT, loaded_at TEXT NOT NULL,
+    PRIMARY KEY (tenant, employee_code));
 
 -- ---------------------------------------------------------------------------
 -- Step 1: stage + normalise source rows (all conversions happen here).
@@ -65,11 +118,20 @@ SELECT
     -- no conflict handling, so that collision does not skip a row - it FAILS the
     -- whole import. A dash rather than the code's slash, to stay a conventional
     -- local-part.
-    -- NOTE this does not protect against two employees sharing a REAL address
-    -- (F40) across payrolls, which is a live possibility for a multi-payroll
-    -- client and would fail the same way. See conversion-plan.md §6.
-    COALESCE(NULLIF(e.emailaddress_f40, ''),
-             :'payroll_number' || '-' || e.employeeid_f01::text || '@migrated.invalid') AS email
+    -- A REAL address (F40) is used only by the one employee step 0 chose to
+    -- keep it, and only while no other login holds it; every other copy falls
+    -- back to the placeholder and is recorded in migration.email_replaced.
+    CASE WHEN btrim(COALESCE(e.emailaddress_f40, '')) <> ''
+              AND EXISTS (SELECT 1 FROM _email_keep k
+                          WHERE k.email_norm = lower(btrim(e.emailaddress_f40))
+                            AND k.payroll_number = :'payroll_number'::int
+                            AND k.empno = e.employeeid_f01::text)
+              AND NOT EXISTS (SELECT 1 FROM public.pipro_core_users u
+                              WHERE lower(btrim(u.email)) = lower(btrim(e.emailaddress_f40)))
+         THEN btrim(e.emailaddress_f40)
+         ELSE :'payroll_number' || '-' || e.employeeid_f01::text || '@migrated.invalid'
+    END                                              AS email,
+    NULLIF(btrim(COALESCE(e.emailaddress_f40, '')), '') AS legacy_email
 -- Basic rate (owner correction 2026-08-01, learned the hard way on the first
 -- live comparison): the basiccode ordinal is a CALC INPUT (this client's is a
 -- user-named annual "raise lever"), NOT period pay — mapping it to the
@@ -81,6 +143,22 @@ SELECT
 -- employees.salary_current_minor is set by 20_recurring from the routed
 -- earnings (standing monthly gross).
 FROM :"legacy_company_schema".employees e;
+
+-- Record every real address that did not survive, and who kept it.
+DELETE FROM migration.email_replaced
+WHERE tenant = :'tenant_schema' AND employee_code LIKE :'payroll_number' || '/%';
+INSERT INTO migration.email_replaced (tenant, employee_code, email, reason, kept_by, loaded_at)
+SELECT :'tenant_schema', s.employee_code, s.legacy_email,
+       CASE WHEN k.payroll_number || '/' || k.empno <> s.employee_code THEN 'shared_with_another_employee'
+            ELSE 'already_held_by_another_login' END,
+       k.payroll_number || '/' || k.empno, :'cutover'
+FROM _src s
+JOIN _email_keep k ON k.email_norm = lower(s.legacy_email)
+WHERE s.legacy_email IS NOT NULL AND s.email <> s.legacy_email;
+
+SELECT count(*) AS real_emails_replaced_with_placeholder
+FROM migration.email_replaced
+WHERE tenant = :'tenant_schema' AND employee_code LIKE :'payroll_number' || '/%';
 
 -- ---------------------------------------------------------------------------
 -- Step 2: pipro_core_users (public) — MINT one login-user per employee and
@@ -108,9 +186,15 @@ END $$;
 
 -- ---------------------------------------------------------------------------
 -- Step 3: employees. id is a TEXT PK — the app fills it with random hex; we use
--- deterministic 'emp-<EmpNo>' so it's idempotent AND preserves a trace back to
--- the legacy EmployeeNo. (This TEXT id is used only by hrm self-refs like
--- manager_id; the PAYROLL domain keys on user_id — see identity note.)
+-- deterministic 'emp-<payroll>-<EmpNo>' so it's idempotent AND preserves a trace
+-- back to the interim EmployeeNo. QUALIFIED BY PAYROLL like employee_code: the
+-- interim EmployeeNo is an auto-key unique only within one legacy database, so a
+-- bare 'emp-<EmpNo>' failed a multi-payroll client's second payroll here on
+-- employees_pkey ('emp-1' again) - ON CONFLICT (employee_code) does not cover the
+-- primary key. Injective: EmpNo is digits only, so the LAST dash delimits it.
+-- Nothing joins on this id - later scripts resolve employees through
+-- employee_code. (This TEXT id is used only by hrm self-refs like manager_id;
+-- the PAYROLL domain keys on user_id — see identity note.)
 -- ---------------------------------------------------------------------------
 -- NO email column here. hrm-core migration 2026_09_09_100000_employees_drop_email
 -- removed it: an address belongs to the PERSON, so it lives on
@@ -126,7 +210,7 @@ INSERT INTO employees (
     date_of_birth, gender, title, nationality_country_code, marital_status, preferred_name,
     occupation, category)
 SELECT
-    'emp-' || s.legacy_empno, m.user_id, s.employee_code, s.first_name, s.last_name,
+    'emp-' || :'payroll_number' || '-' || s.legacy_empno, m.user_id, s.employee_code, s.first_name, s.last_name,
     s.id_number, s.hired_at, s.terminated_at, 0, s.currency,   -- salary display set by 20_recurring
     :'cutover', s.date_of_birth, s.gender, s.title, s.nationality_country_code,
     s.marital_status, NULL, s.occupation, s.category
@@ -184,9 +268,9 @@ WHERE k.eff IS NOT NULL;   -- the 'terminated' row only when a discharge date ex
 -- Step 7 (second pass): manager_id self-FK (references employees.id TEXT).
 -- CHOOSE: needs the legacy reports-to EmpNo column; stubbed.
 -- ---------------------------------------------------------------------------
--- UPDATE employees c SET manager_id = 'emp-' || src.managerempno
+-- UPDATE employees c SET manager_id = 'emp-' || :'payroll_number' || '-' || src.managerempno
 -- FROM :"legacy_company_schema".employees src
--- WHERE src.employeeno::text = substring(c.id from 5);
+-- WHERE c.id = 'emp-' || :'payroll_number' || '-' || src.employeeno::text;
 
 COMMIT;
 \echo 'Done (core):' :tenant_schema '<-' :legacy_company_schema

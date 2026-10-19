@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS compare.employee_map (
     tenant_schema     TEXT    NOT NULL,
     employee_code     TEXT    NOT NULL,          -- the spine
     interim_empno     INTEGER,                   -- airplane.employees.employeeno (AUTO_KEY)
-    pipro_employee_id TEXT,                      -- tenant.employees.id ('emp-<interim_empno>')
+    pipro_employee_id TEXT,                      -- tenant.employees.id ('emp-<payroll>-<interim_empno>')
     pipro_user_id     BIGINT,                    -- tenant.employees.user_id — what child rows key on
     legacy_empno      TEXT,                      -- pw_imf.EmpNo, filled from a SQL Server export
     surname           TEXT,

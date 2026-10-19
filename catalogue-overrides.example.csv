@@ -1,0 +1,26 @@
+# Catalogue overrides - names for ordinals the payrolls of one tenant disagree on.
+#
+# SETUP: copy to catalogue-overrides.csv (gitignored) and edit. Lines starting
+# with # are ignored, as are blank lines. convert.ps1 reads only the rows for the
+# tenant it is converting.
+#
+# WHEN YOU NEED A ROW: sql/15_catalogue_merge.sql (run by convert.ps1) stops on
+# CONFLICT_NAME - an ordinal that holds values in two or more payrolls under
+# different names. A script cannot tell "On Mat Leave" vs "On Maternity Lv"
+# (same thing, two spellings) from "NICK Name" vs "SIC 7 Code" (two different
+# things), so you decide. The override sets the NAME only; every payroll's values
+# stay on the ordinal. For two genuinely different things sharing an ordinal, the
+# clean fix is to move one payroll's values to a free ordinal in legacy first; a
+# combined name is the stopgap.
+#
+# COLUMNS
+#   tenant_slug   the tenant being converted
+#   catalogue     amounts | alpha | dates | precision
+#   ordinal_no    as the merge report shows it (interim numbering: alpha refnos
+#                 are the legacy RefNo ordinal + 100)
+#   name          the name the tenant's catalogue gets
+#   note          why - kept with the merge record
+
+tenant_slug,catalogue,ordinal_no,name,note
+acme,dates,6,On Maternity Leave,same meaning in every payroll - two spellings
+acme,alpha,111,NICK Name / SIC 7 Code,payroll 2 = nickname; payrolls 1+3 = SIC 7 code - stopgap until moved

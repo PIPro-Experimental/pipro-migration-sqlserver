@@ -77,13 +77,21 @@ SELECT
     e.user_id                           AS employee_id,      -- pipro link; NULL if employee didn't load
     e.hired_at                          AS hired_at,
     a.ordinalno                       AS ordinal_no,       -- the Q-bank address (preserved)
-    s.description                     AS name,             -- code name
+    -- The TENANT's name for the ordinal (15_catalogue_merge may have chosen
+    -- another payroll's spelling), so E/D labels match the catalogue. Routing
+    -- below still uses this payroll's own codetype.
+    COALESCE(tc.name, s.description)  AS name,             -- code name
     (a.amount_q * 100)::bigint        AS amount_minor,     -- ×100 major→minor
     a.amount_q                        AS amount_raw,       -- full 4dp (balances route)
     upper(nullif(s.codetype, ''))     AS codetype
 FROM :"legacy_company_schema".employee_amounts a
 LEFT JOIN :"legacy_company_schema".settings_employee_amounts s ON s.ordinalno = a.ordinalno
-LEFT JOIN employees e ON e.id = 'emp-' || a.employeeno::text
+LEFT JOIN settings_employee_amounts tc ON tc.ordinal_no = a.ordinalno
+-- Employee via employee_code, built exactly as 10_employees builds it. The
+-- interim EmployeeNo is unique only within one legacy database, so a bare
+-- EmployeeNo join would hand payroll 2's amounts to payroll 1's employees.
+LEFT JOIN :"legacy_company_schema".employees le ON le.employeeno = a.employeeno
+LEFT JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 WHERE a.amount_q <> 0;
 
 -- E → earnings.  CHOOSE: label/payroll_code scheme (using catalogue name here).

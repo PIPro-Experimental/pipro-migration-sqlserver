@@ -17,17 +17,19 @@
              names, so the next PostgresImport run cannot overwrite them
            - VERIFIES the payroll number in the data matches what the manifest
              declared
-      4b. Compares the payrolls' employee-data definitions (amount codes, dates,
-          indicators, registers). If they differ, the largest payroll is imported in
-          full and the others bring in their employees only - after a warning and
-          your typed confirmation.
       5. Seeds migration_map from the manifest.
-      6. Runs the import chain (run-migration.ps1) for every mapped payroll.
+      6. Merges the payrolls' employee-data catalogues (amount codes, alpha,
+         dates, registers) into ONE for the tenant - sql/15_catalogue_merge.sql.
+         It reports every ordinal the payrolls disagree on and STOPS if any
+         ordinal holding values in two payrolls has two names; name those in
+         catalogue-overrides.csv and re-run. Then writes the merged catalogues.
+      7. Runs the import chain (run-migration.ps1) for every mapped payroll.
 
-    Step 4 pauses because PostgresImport always writes the SAME two schema names
-    on the desktop. Ten payrolls cannot sit there at once, so each has to be
-    imported and then parked in docker before the next one runs. That is the one
-    part no script here can do for you.
+    Step 4 pauses so you can run PostgresImport for that payroll, writing to the
+    schema name(s) the manifest gives it. Each payroll has its own desktop schema,
+    so you may also run all of them beforehand and just press Enter at each pause.
+    PostgresImport drops and recreates its target schemas on every run, so two
+    payrolls must never share one.
 
     WRITES. It empties and repopulates the tenant. Reports come afterwards, from
     compare_report.cmd and run_report.cmd.
@@ -37,7 +39,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$TenantSlug,
     [switch]$SkipReset,
-    [string]$ManifestPath
+    [string]$ManifestPath,
+    [string]$OverridesPath = (Join-Path $PSScriptRoot 'catalogue-overrides.csv')
 )
 $ErrorActionPreference = 'Stop'
 
@@ -155,15 +158,16 @@ foreach ($r in $current) {
     Write-Host ""
     Write-Host " Now, outside this script:" -ForegroundColor Yellow
     Write-Host "   1. restore '$($r.source_db)' to SQL Server" -ForegroundColor Yellow
-    Write-Host "   2. run PostgresImport against it" -ForegroundColor Yellow
+    Write-Host "   2. run PostgresImport against it, with its COMPANY schema set to" -ForegroundColor Yellow
+    Write-Host "      '$($r.company_schema)' and its PAYROLL schema set to '$($r.payroll_schema)'" -ForegroundColor Yellow
+    Write-Host "      (already done? just continue)" -ForegroundColor Yellow
     Write-Host ""
-    Write-Host " Then this script copies the interim schemas into docker as" -ForegroundColor DarkGray
-    Write-Host "   $($r.company_schema) + $($r.payroll_schema)" -ForegroundColor DarkGray
-    Write-Host " so the NEXT PostgresImport run cannot overwrite them." -ForegroundColor DarkGray
+    Write-Host " Then this script copies those desktop schemas into docker under the same names." -ForegroundColor DarkGray
     Confirm-Step "PostgresImport finished for '$($r.source_db)'?"
 
     & (Join-Path $PSScriptRoot 'refresh-interim.ps1') `
-        -Schema $r.company_schema -PayrollTarget $r.payroll_schema
+        -Schema $r.company_schema -SchemaTarget $r.company_schema `
+        -PayrollSource $r.payroll_schema -PayrollTarget $r.payroll_schema
     if ($LASTEXITCODE -ne 0) { Write-Host "==> Refresh failed for $($r.source_db)." -ForegroundColor Red; exit 1 }
 
     # VERIFY the declared payroll number against the data. The manifest is a
@@ -181,69 +185,10 @@ foreach ($r in $current) {
     Write-Host "    payroll number $found confirmed against the data." -ForegroundColor Green
 }
 
-# --- 4b. Do the payrolls share one set of employee-data definitions? -------------
-# A tenant holds ONE catalogue of user-defined employee data (amount codes, dates,
-# indicators, precision amounts), but every legacy payroll database had its own
-# PW_Parm_Codes and friends. If they differ, the payrolls cannot all be imported in
-# full: code 40 would mean "basic salary" in one and something else in another. Then
-# the payroll with the most employees is imported in full and the others bring in
-# their employees only, with a warning. The client will usually say what they really
-# want and the conversion is redone from scratch.
-$catalogues = @(
-    @{ Name = 'amount codes (PW_Parm_Codes)';      Table = 'settings_employee_amounts';
-       Cols = "ordinalno, upper(btrim(coalesce(description,''))), upper(btrim(coalesce(codetype,''))), upper(btrim(coalesce(taxtype,''))), upper(btrim(coalesce(taxincasn,'')))" },
-    @{ Name = 'employee dates';                    Table = 'settings_employee_dates';
-       Cols = "ordinalno, upper(btrim(coalesce(description,'')))" },
-    @{ Name = 'indicators / alpha fields';         Table = 'settings_employee_alpha';
-       Cols = "ordinalno, upper(btrim(coalesce(alphaname,'')))" },
-    @{ Name = 'employee registers (precision)';    Table = 'settings_employee_precision_amounts';
-       Cols = "ordinalno, upper(btrim(coalesce(description,''))), upper(btrim(coalesce(codetype,'')))" }
-)
-foreach ($r in $current) {
-    $r | Add-Member -NotePropertyName scope -NotePropertyValue 'full' -Force
-    $r | Add-Member -NotePropertyName employees -NotePropertyValue ([int](Invoke-Psql "SELECT count(*) FROM $($r.company_schema).employees")) -Force
-}
-if ($current.Count -gt 1) {
-    $base = $current | Sort-Object -Property employees -Descending | Select-Object -First 1
-    Write-Host ""
-    Write-Host "==> Comparing employee-data definitions against '$($base.source_db)' ($($base.employees) employees, the largest)..." -ForegroundColor Cyan
-    $incompatible = @()
-    foreach ($r in $current) {
-        if ($r -eq $base) { continue }
-        $diffs = @()
-        foreach ($c in $catalogues) {
-            $n = Invoke-Psql @"
-SELECT count(*) FROM (
-    (SELECT $($c.Cols) FROM $($r.company_schema).$($c.Table) EXCEPT SELECT $($c.Cols) FROM $($base.company_schema).$($c.Table))
-    UNION ALL
-    (SELECT $($c.Cols) FROM $($base.company_schema).$($c.Table) EXCEPT SELECT $($c.Cols) FROM $($r.company_schema).$($c.Table))
-) x
-"@
-            if ([int]$n -gt 0) { $diffs += "$($c.Name): $([int]$n) definitions differ" }
-        }
-        if ($diffs.Count -gt 0) {
-            $r.scope = 'employees'
-            $incompatible += $r
-            Write-Host "    $($r.source_db): DIFFERENT" -ForegroundColor Yellow
-            foreach ($d in $diffs) { Write-Host "        $d" -ForegroundColor Yellow }
-        } else {
-            Write-Host "    $($r.source_db): same definitions - imported in full" -ForegroundColor Green
-        }
-    }
-    if ($incompatible.Count -gt 0) {
-        Write-Host ""
-        Write-Host "---------------------------------------------------------------------------" -ForegroundColor Yellow
-        Write-Host " WARNING: the payrolls do not share one set of employee-data definitions." -ForegroundColor Yellow
-        Write-Host " '$($base.source_db)' will be imported in FULL. These bring in their EMPLOYEES" -ForegroundColor Yellow
-        Write-Host " ONLY (no amounts, dates, indicators, history, settings, calc program or" -ForegroundColor Yellow
-        Write-Host " calendar), because their codes mean different things:" -ForegroundColor Yellow
-        foreach ($r in $incompatible) { Write-Host "     - $($r.source_db) -> payroll $($r.target_payroll_id)" -ForegroundColor Yellow }
-        Write-Host " Ask the client how they want the definitions merged, then redo the" -ForegroundColor Yellow
-        Write-Host " conversion from scratch." -ForegroundColor Yellow
-        Write-Host "---------------------------------------------------------------------------" -ForegroundColor Yellow
-        Confirm-Step "Import '$($base.source_db)' in full and the others as employees only?" -Expect 'EMPLOYEES'
-    }
-}
+# Every payroll is imported in full. Disagreements between their employee-data
+# catalogues are settled by the catalogue merge (step 6), not by cutting payrolls
+# down to employees only.
+foreach ($r in $current) { $r | Add-Member -NotePropertyName scope -NotePropertyValue 'full' -Force }
 
 # --- 5. Seed migration_map -------------------------------------------------------
 Write-Host ""
@@ -266,9 +211,72 @@ INSERT INTO migration_map (legacy_company_schema, legacy_payroll_schema, tenant_
 Invoke-Psql "SELECT legacy_company_schema || ' + ' || legacy_payroll_schema || ' -> ' || tenant_slug || ' payroll ' || target_payroll_id || ' (' || scope || ')' FROM migration_map WHERE tenant_slug = '$TenantSlug' ORDER BY target_payroll_id" |
     ForEach-Object { if ($_) { Write-Host "    $_" -ForegroundColor DarkGray } }
 
-Confirm-Step "Run the import chain for these payroll(s)?"
+# --- 6. Merge the employee-data catalogues --------------------------------------
+# One tenant, one catalogue per kind of employee data; every payroll had its own.
+# 15_catalogue_merge.sql decides each ordinal (see its header) and reports every
+# disagreement. Ordinals that hold values in two payrolls under two names cannot
+# be decided by a script: they are named in catalogue-overrides.csv.
+function Invoke-CatalogueMerge([string]$Apply) {
+    Get-Content (Join-Path $PSScriptRoot 'sql/15_catalogue_merge.sql') -Raw |
+        docker exec -i -e "PGPASSWORD=$dockerPassword" $dockerContainer psql -U $dockerUser -d $dockerDb `
+            -q -P pager=off -v ON_ERROR_STOP=on -v "tenant_slug=$TenantSlug" -v "tenant_schema=$tenantSchema" -v "apply=$Apply" |
+            Out-Host    # print the report; otherwise it becomes this function's return value
+    return ($LASTEXITCODE -eq 0)
+}
 
-# --- 6. The import chain ---------------------------------------------------------
+$overrides = @()
+if (Test-Path $OverridesPath) {
+    $ovLines = Get-Content $OverridesPath | Where-Object { $_ -match '\S' -and $_.TrimStart() -notmatch '^#' }
+    if ($ovLines.Count -ge 2) {
+        $overrides = @($ovLines | ConvertFrom-Csv | Where-Object { $_.tenant_slug.Trim() -eq $TenantSlug })
+    }
+}
+$ovProblems = @()
+foreach ($o in $overrides) {
+    if ($o.catalogue.Trim() -notin @('amounts','alpha','dates','precision')) { $ovProblems += "catalogue '$($o.catalogue)' must be amounts, alpha, dates or precision" }
+    if ($o.ordinal_no.Trim() -notmatch '^\d+$') { $ovProblems += "ordinal_no '$($o.ordinal_no)' is not a number" }
+    if (-not $o.name.Trim()) { $ovProblems += "$($o.catalogue) $($o.ordinal_no): name is empty" }
+}
+if ($ovProblems.Count -gt 0) {
+    Write-Host "`n==> $OverridesPath has problems:" -ForegroundColor Red
+    $ovProblems | ForEach-Object { Write-Host "    - $_" -ForegroundColor Red }
+    exit 1
+}
+$ovValues = ($overrides | ForEach-Object {
+    $q = { param($s) "'" + ([string]$s).Trim().Replace("'", "''") + "'" }
+    "($(& $q $TenantSlug),$(& $q $_.catalogue),$([int]$_.ordinal_no),$(& $q $_.name),$(& $q $_.note))"
+}) -join ",`n    "
+Invoke-Psql @"
+CREATE SCHEMA IF NOT EXISTS migration;
+CREATE TABLE IF NOT EXISTS migration.catalogue_override (
+    tenant_slug TEXT NOT NULL, catalogue TEXT NOT NULL, ordinal_no INTEGER NOT NULL,
+    name TEXT NOT NULL, note TEXT, PRIMARY KEY (tenant_slug, catalogue, ordinal_no));
+DELETE FROM migration.catalogue_override WHERE tenant_slug = '$TenantSlug';
+$(if ($ovValues) { "INSERT INTO migration.catalogue_override VALUES`n    $ovValues;" })
+"@ -Quiet
+Write-Host ""
+Write-Host "==> Merging employee-data catalogues ($($overrides.Count) override(s) from $(Split-Path $OverridesPath -Leaf))..." -ForegroundColor Cyan
+if (-not (Invoke-CatalogueMerge '0')) { Write-Host "==> Catalogue merge report failed." -ForegroundColor Red; exit 1 }
+
+$blocking = Invoke-Psql "SELECT catalogue || ' ' || ordinal_no || ' (' || verdict || ')' FROM migration.catalogue_merge WHERE tenant_slug = '$TenantSlug' AND verdict LIKE 'CONFLICT%' ORDER BY catalogue, ordinal_no"
+$blocking = @($blocking | Where-Object { $_ })
+if ($blocking.Count -gt 0) {
+    Write-Host ""
+    Write-Host "---------------------------------------------------------------------------" -ForegroundColor Red
+    Write-Host " $($blocking.Count) catalogue conflict(s) - the tenant has been reset but NOT populated:" -ForegroundColor Red
+    $blocking | ForEach-Object { Write-Host "     $_" -ForegroundColor Red }
+    Write-Host ""
+    Write-Host " CONFLICT_NAME: add a row to $(Split-Path $OverridesPath -Leaf) naming the ordinal" -ForegroundColor Yellow
+    Write-Host "   (see catalogue-overrides.example.csv), then re-run convert." -ForegroundColor Yellow
+    Write-Host " CONFLICT_TYPE: the payrolls use the ordinal for different kinds of value;" -ForegroundColor Yellow
+    Write-Host "   renumber it in one legacy payroll first. No override can fix that." -ForegroundColor Yellow
+    Write-Host "---------------------------------------------------------------------------" -ForegroundColor Red
+    exit 1
+}
+Confirm-Step "Write the merged catalogues above and run the import chain for these payroll(s)?"
+if (-not (Invoke-CatalogueMerge '1')) { Write-Host "==> Writing the merged catalogues failed." -ForegroundColor Red; exit 1 }
+
+# --- 7. The import chain ---------------------------------------------------------
 # -SkipMapLoad: run-migration.ps1 otherwise reloads sql/00_migration_map.sql, which
 # drops the map and re-seeds the single-payroll rehearsal row, discarding the rows
 # just seeded from the manifest.

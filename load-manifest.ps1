@@ -97,9 +97,8 @@ function Import-PiproManifest
                 $problems.Add("${where}: $col '$($r.$col)' is not a plain lowercase schema name")
             }
         }
-        if ($r.company_schema -and $r.company_schema -eq $r.payroll_schema) {
-            $problems.Add("${where}: company_schema and payroll_schema must differ")
-        }
+        # company_schema = payroll_schema is allowed: PostgresImport can write both
+        # halves into one schema (their table names never overlap).
     }
 
     # Cross-row uniqueness. Each of these would otherwise destroy data quietly:
@@ -111,8 +110,13 @@ function Import-PiproManifest
             $problems.Add("duplicate $keyName '$($_.Name)' in $($_.Count) rows - each must be unique")
         }
     }
-    Add-DuplicateProblem $rows 'company_schema' { $_.company_schema }
-    Add-DuplicateProblem $rows 'payroll_schema' { $_.payroll_schema }
+    # A schema may serve both halves of ONE row, but never appear in two rows -
+    # in either column.
+    $schemaUse = foreach ($r in $rows) {
+        @($r.company_schema, $r.payroll_schema) | Where-Object { $_ } | Sort-Object -Unique |
+            ForEach-Object { [pscustomobject]@{ schema = $_; source_db = $r.source_db } }
+    }
+    Add-DuplicateProblem $schemaUse 'schema' { $_.schema }
     Add-DuplicateProblem $rows 'source_db'      { $_.source_db }
 
     # Within one tenant: a payroll id and a legacy payroll number each identify

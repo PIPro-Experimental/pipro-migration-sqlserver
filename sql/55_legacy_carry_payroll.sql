@@ -4,8 +4,12 @@
 -- Run after 10_employees.sql (employee ids must exist). Re-runnable: rows the tenant
 -- already has are UPDATED from the interim, so a re-import overwrites any change made
 -- to these tables in the tenant since (e.g. payroll registers an approved run wrote).
--- Identity-keyed tables are insert-only (their ids change between imports).
--- Runner variables: :legacy_payroll_schema :tenant_schema :payroll_number
+-- Identity-keyed tables are insert-only: the tenant mints the id (legacy AutoNumbers
+-- collide across payrolls), and a payroll/employee that already has rows is skipped.
+-- Employees resolve via employee_code = <payroll_number>/<EmployeeId_F01>, as 10 builds it.
+-- Several payrolls into ONE tenant: tables with no payroll column are shared by all of
+-- them - see conversion-plan.md "Company-side carry tables" for what that means per table.
+-- Runner variables: :legacy_payroll_schema :legacy_company_schema :tenant_schema :payroll_number
 --
 -- Source identifiers are UNQUOTED LOWERCASE: DataDictionary's ColumnCollection
 -- lowercases every table/column name, so that is what the desktop DB contains.
@@ -43,42 +47,48 @@ ON CONFLICT (payroll, ordinal_no) DO UPDATE SET description = EXCLUDED.descripti
 INSERT INTO run_history (run_year, run_period, employee_id, run_date, birth_date, engage_date, discharge_date, employee_code, surname, initials, payroll, cost_code, tax_code, occupation, stop_pay, category, gender, tax_dependants)
 SELECT s.runyear, s.runperiod, e.user_id, s.rundate, s.birthdate, s.engagedate, s.dischargedate, s.employeeid, s.surname, s.initials, s.payroll, s.costcode, s.taxcode, s.occupation, s.stoppay, s.category, s.gender, s.taxdependants
 FROM :"legacy_payroll_schema".run_history s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 ON CONFLICT (run_year, run_period, employee_id) DO UPDATE SET run_date = EXCLUDED.run_date, birth_date = EXCLUDED.birth_date, engage_date = EXCLUDED.engage_date, discharge_date = EXCLUDED.discharge_date, employee_code = EXCLUDED.employee_code, surname = EXCLUDED.surname, initials = EXCLUDED.initials, payroll = EXCLUDED.payroll, cost_code = EXCLUDED.cost_code, tax_code = EXCLUDED.tax_code, occupation = EXCLUDED.occupation, stop_pay = EXCLUDED.stop_pay, category = EXCLUDED.category, gender = EXCLUDED.gender, tax_dependants = EXCLUDED.tax_dependants;
 
 -- ---- run_history_amounts ----
 INSERT INTO run_history_amounts (payroll, run_year, run_period, employee_id, ordinal_no, usage_id, code_name, code_type, amount)
 SELECT :payroll_number, s.runyear, s.runperiod, e.user_id, s.ordinalno, s.usageid, s.codename, s.codetype, s.amount
 FROM :"legacy_payroll_schema".run_history_amounts s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 ON CONFLICT (payroll, run_year, run_period, employee_id, ordinal_no, usage_id) DO UPDATE SET code_name = EXCLUDED.code_name, code_type = EXCLUDED.code_type, amount = EXCLUDED.amount;
 
 -- ---- run_history_alpha ----
 INSERT INTO run_history_alpha (payroll, run_year, run_period, employee_id, ordinal_no, reference, ref_name)
 SELECT :payroll_number, s.runyear, s.runperiod, e.user_id, s.ordinalno, s.reference, s.refname
 FROM :"legacy_payroll_schema".run_history_alpha s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 ON CONFLICT (payroll, run_year, run_period, employee_id, ordinal_no) DO UPDATE SET reference = EXCLUDED.reference, ref_name = EXCLUDED.ref_name;
 
 -- ---- run_history_accounts ----
 INSERT INTO run_history_accounts (payroll, run_year, run_period, employee_id, ordinal_no, pay_mode, account_type, account_name, account_number, branch_code, source_bank_account, split_pay_code, account_holder_status, sars_bank_account, account_iban, account_currency)
 SELECT :payroll_number, s.runyear, s.runperiod, e.user_id, s.ordinalno, s.paymode, s.accounttype, s.accountname, s.accountnumber, s.branchcode, s.sourcebankaccount, s.splitpaycode, s.accountholderstatus, s.sarsbankaccount, s.accountiban, s.accountcurrency
 FROM :"legacy_payroll_schema".run_history_accounts s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 ON CONFLICT (payroll, run_year, run_period, employee_id, ordinal_no) DO UPDATE SET pay_mode = EXCLUDED.pay_mode, account_type = EXCLUDED.account_type, account_name = EXCLUDED.account_name, account_number = EXCLUDED.account_number, branch_code = EXCLUDED.branch_code, source_bank_account = EXCLUDED.source_bank_account, split_pay_code = EXCLUDED.split_pay_code, account_holder_status = EXCLUDED.account_holder_status, sars_bank_account = EXCLUDED.sars_bank_account, account_iban = EXCLUDED.account_iban, account_currency = EXCLUDED.account_currency;
 
 -- ---- employee_interim ----
 INSERT INTO employee_interim (payroll, employee_id, cost_code, user_id)
 SELECT :payroll_number, e.user_id, s.costcode, s.user_id
 FROM :"legacy_payroll_schema".employee_interim s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 ON CONFLICT (payroll, employee_id) DO UPDATE SET cost_code = EXCLUDED.cost_code, user_id = EXCLUDED.user_id;
 
 -- ---- employee_interim_items ----
 INSERT INTO employee_interim_items (payroll, employee_id, ordinal_no, qmf_code)
 SELECT :payroll_number, e.user_id, s.ordinalno, s.qmfcode
 FROM :"legacy_payroll_schema".employee_interim_items s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 ON CONFLICT (payroll, employee_id, ordinal_no) DO UPDATE SET qmf_code = EXCLUDED.qmf_code;
 
 -- ---- settings_auto_ytd ----
@@ -148,26 +158,28 @@ FROM :"legacy_payroll_schema".settings_table_values s
 ON CONFLICT (payroll, ordinal_no, row_no) DO UPDATE SET item = EXCLUDED.item;
 
 -- ---- pay_run_messages ----
-INSERT INTO pay_run_messages (payroll, id, employee_id, amount, class_no, code, cost_code, disch_ind, initials, message_field, message_type, op1_a, op1_amount, op1_n, op2_a, op2_amount, op2_n, replace_ind, surname, sys_code)
-SELECT :payroll_number, s.autonumber, e.user_id, s.amount, s.classno, s.code, s.costcode, s.dischind, s.initials, s.messagefield, s.messagetype, s.op1a, s.op1amount, s.op1n, s.op2a, s.op2amount, s.op2n, s.replaceind, s.surname, s.syscode
+INSERT INTO pay_run_messages (payroll, employee_id, amount, class_no, code, cost_code, disch_ind, initials, message_field, message_type, op1_a, op1_amount, op1_n, op2_a, op2_amount, op2_n, replace_ind, surname, sys_code)
+SELECT :payroll_number, e.user_id, s.amount, s.classno, s.code, s.costcode, s.dischind, s.initials, s.messagefield, s.messagetype, s.op1a, s.op1amount, s.op1n, s.op2a, s.op2amount, s.op2n, s.replaceind, s.surname, s.syscode
 FROM :"legacy_payroll_schema".pay_run_messages s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
-ON CONFLICT (id) DO NOTHING;
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
+WHERE NOT EXISTS (SELECT 1 FROM pay_run_messages x WHERE x.payroll = :payroll_number);
 SELECT setval(pg_get_serial_sequence('pay_run_messages', 'id'), (SELECT COALESCE(MAX(id), 0) + 1 FROM pay_run_messages), false);
 
 -- ---- pay_run_tax_audit ----
-INSERT INTO pay_run_tax_audit (payroll, id, break_key, employee_id, line_nr, break_key_descr, page_nr, print_line, report_section, run_date)
-SELECT :payroll_number, s.autonumber, s.breakkey, e.user_id, s.linenr, s.breakkeydescr, s.pagenr, s.printline, s.reportsection, s.rundate
+INSERT INTO pay_run_tax_audit (payroll, break_key, employee_id, line_nr, break_key_descr, page_nr, print_line, report_section, run_date)
+SELECT :payroll_number, s.breakkey, e.user_id, s.linenr, s.breakkeydescr, s.pagenr, s.printline, s.reportsection, s.rundate
 FROM :"legacy_payroll_schema".pay_run_tax_audit s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
-ON CONFLICT (id) DO NOTHING;
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
+WHERE NOT EXISTS (SELECT 1 FROM pay_run_tax_audit x WHERE x.payroll = :payroll_number);
 SELECT setval(pg_get_serial_sequence('pay_run_tax_audit', 'id'), (SELECT COALESCE(MAX(id), 0) + 1 FROM pay_run_tax_audit), false);
 
 -- ---- ratef ----
-INSERT INTO ratef (payroll, id, code, date_value, cost_code, description, effective_date, rate_value)
-SELECT :payroll_number, s.autonumber, s.code, s.datevalue, s.costcode, s.description, s.effectivedate, s.ratevalue
+INSERT INTO ratef (payroll, code, date_value, cost_code, description, effective_date, rate_value)
+SELECT :payroll_number, s.code, s.datevalue, s.costcode, s.description, s.effectivedate, s.ratevalue
 FROM :"legacy_payroll_schema".ratef s
-ON CONFLICT (id) DO NOTHING;
+WHERE NOT EXISTS (SELECT 1 FROM ratef x WHERE x.payroll = :payroll_number);
 SELECT setval(pg_get_serial_sequence('ratef', 'id'), (SELECT COALESCE(MAX(id), 0) + 1 FROM ratef), false);
 
 -- ---- settings_taxcodes_cod_congo ----

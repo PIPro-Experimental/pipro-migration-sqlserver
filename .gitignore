@@ -4,6 +4,8 @@ settings.local.txt
 
 # Per-client conversion manifest (copy payrolls.example.csv -> payrolls.csv).
 payrolls.csv
+# ... and its catalogue overrides (copy catalogue-overrides.example.csv).
+catalogue-overrides.csv
 
 # Local environment overrides — NEVER commit real DB credentials.
 .env

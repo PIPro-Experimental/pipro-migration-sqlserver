@@ -11,7 +11,8 @@
 --   age_band        <- 'derived' (pack computes from date_of_birth)
 --   effective_from  <- engagement date (same anchor as the contract row)
 --
--- Runner variables: :legacy_company_schema :tenant_schema :cutover :system_user_id
+-- Runner variables: :legacy_company_schema :tenant_schema :payroll_number
+--                   :cutover :system_user_id
 -- ===========================================================================
 \set ON_ERROR_STOP on
 BEGIN;
@@ -29,7 +30,8 @@ SELECT
     s.engagedate_d931::text,
     :'cutover', :system_user_id
 FROM :"legacy_company_schema".employees s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+-- via employee_code, as 10 builds it (EmployeeNo is unique only per payroll)
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || s.employeeid_f01::text
 WHERE NOT EXISTS (                                   -- idempotency
     SELECT 1 FROM employee_tax_status t WHERE t.employee_id = e.user_id);
 

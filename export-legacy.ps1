@@ -103,10 +103,13 @@ $extracts = @(
     # Mirrors SQLImport.getMoveOrdinals exactly - that java is the authority for
     # which slots were promoted, so this query is a copy of its two, not a guess.
     @{ Table = 'compare.legacy_promoted'; Cols = 'payroll, empcategory_ind, id_ref, sex_ind, passport_refno';
+       # Payroll = 0 rows are legacy crash artifacts and ignored, as in the java.
        Query = "SELECT u.Payroll, ISNULL(u.EmpCategoryInd,0), ISNULL(u.IdRef,0), ISNULL(u.SexInd,0), " +
-               "ISNULL(COALESCE((SELECT PassportRefNo FROM PW_Parm_Irp5NonFinancial f JOIN PW_Parm_RefNoNames r ON r.OrdinalNo = f.PassportRefNo), " +
-               "(SELECT OrdinalNo FROM PW_Parm_RefNoNames WHERE RefNoName LIKE '%passport%' GROUP BY OrdinalNo HAVING COUNT(*) = 1)), 0) " +
-               "FROM PW_Parm_PayrollUser u" }
+               "ISNULL(COALESCE(" +
+               "(SELECT MAX(f.PassportRefNo) FROM PW_Parm_Irp5NonFinancial f JOIN PW_Parm_RefNoNames r ON r.Payroll = f.Payroll AND r.OrdinalNo = f.PassportRefNo " +
+               "WHERE f.Payroll = u.Payroll HAVING COUNT(DISTINCT f.PassportRefNo) = 1), " +
+               "(SELECT MAX(OrdinalNo) FROM PW_Parm_RefNoNames WHERE Payroll = u.Payroll AND RefNoName LIKE '%passport%' HAVING COUNT(DISTINCT OrdinalNo) = 1)), 0) " +
+               "FROM PW_Parm_PayrollUser u WHERE u.Payroll <> 0" }
 )
 
 $tmp = Join-Path $env:TEMP "pipro-legacy-export"

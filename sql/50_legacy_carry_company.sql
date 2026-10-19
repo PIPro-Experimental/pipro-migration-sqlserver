@@ -4,7 +4,11 @@
 -- Run after 10_employees.sql (employee ids must exist). Re-runnable: rows the tenant
 -- already has are UPDATED from the interim, so a re-import overwrites any change made
 -- to these tables in the tenant since (e.g. payroll registers an approved run wrote).
--- Identity-keyed tables are insert-only (their ids change between imports).
+-- Identity-keyed tables are insert-only: the tenant mints the id (legacy AutoNumbers
+-- collide across payrolls), and a payroll/employee that already has rows is skipped.
+-- Employees resolve via employee_code = <payroll_number>/<EmployeeId_F01>, as 10 builds it.
+-- Several payrolls into ONE tenant: tables with no payroll column are shared by all of
+-- them - see conversion-plan.md "Company-side carry tables" for what that means per table.
 -- Runner variables: :legacy_company_schema :tenant_schema :payroll_number
 --
 -- Source identifiers are UNQUOTED LOWERCASE: DataDictionary's ColumnCollection
@@ -45,11 +49,12 @@ FROM :"legacy_company_schema".settings_global s
 ON CONFLICT (payroll) DO UPDATE SET adjust_run_count = EXCLUDED.adjust_run_count, consol_cost_flag = EXCLUDED.consol_cost_flag, consol_flag = EXCLUDED.consol_flag, current_iteration = EXCLUDED.current_iteration, current_run = EXCLUDED.current_run, current_run_date = EXCLUDED.current_run_date, current_tax_period = EXCLUDED.current_tax_period, include3rd_party_trans = EXCLUDED.include3rd_party_trans, include_batch_mastf = EXCLUDED.include_batch_mastf, include_batch_trans = EXCLUDED.include_batch_trans, include_delay_trans = EXCLUDED.include_delay_trans, include_man_pays = EXCLUDED.include_man_pays, include_other_trans = EXCLUDED.include_other_trans, include_permtrans = EXCLUDED.include_permtrans, interim_payroll = EXCLUDED.interim_payroll, interim_tax_to_date = EXCLUDED.interim_tax_to_date, interim_tax_to_period = EXCLUDED.interim_tax_to_period, permit_costing_flag = EXCLUDED.permit_costing_flag, system_date = EXCLUDED.system_date, zero_runf_flag = EXCLUDED.zero_runf_flag, vat_percentage = EXCLUDED.vat_percentage, take_on_ind = EXCLUDED.take_on_ind, trans_seq_no = EXCLUDED.trans_seq_no;
 
 -- ---- employee_increments ----
-INSERT INTO employee_increments (id, employee_id, date_d8, amount_u)
-SELECT s.autonumber, e.user_id, s.date_d8, s.amount_u
+INSERT INTO employee_increments (employee_id, date_d8, amount_u)
+SELECT e.user_id, s.date_d8, s.amount_u
 FROM :"legacy_company_schema".employee_increments s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
-ON CONFLICT (id) DO NOTHING;
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
+WHERE NOT EXISTS (SELECT 1 FROM employee_increments x WHERE x.employee_id = e.user_id);
 SELECT setval(pg_get_serial_sequence('employee_increments', 'id'), (SELECT COALESCE(MAX(id), 0) + 1 FROM employee_increments), false);
 
 -- ---- settings_thirdparty_codes ----
@@ -80,7 +85,8 @@ ON CONFLICT (agent_key, ordinal_no) DO UPDATE SET agent_name = EXCLUDED.agent_na
 INSERT INTO employee_thirdparty_transact (employee_id, trans_seq_no, amount, class_no, code, cost_code, date_value, user_id)
 SELECT e.user_id, s.transseqno, s.amount, s.classno, s.code, s.costcode, s.datevalue, s.user_id
 FROM :"legacy_company_schema".employee_thirdparty_transact s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 ON CONFLICT (employee_id, trans_seq_no) DO UPDATE SET amount = EXCLUDED.amount, class_no = EXCLUDED.class_no, code = EXCLUDED.code, cost_code = EXCLUDED.cost_code, date_value = EXCLUDED.date_value, user_id = EXCLUDED.user_id;
 
 -- ---- settings_banks ----
@@ -90,11 +96,12 @@ FROM :"legacy_company_schema".settings_banks s
 ON CONFLICT (branch_code) DO UPDATE SET bank_name = EXCLUDED.bank_name, branch_addr1 = EXCLUDED.branch_addr1, branch_addr2 = EXCLUDED.branch_addr2, branch_addr3 = EXCLUDED.branch_addr3, branch_addr4 = EXCLUDED.branch_addr4, branch_name = EXCLUDED.branch_name, country_code = EXCLUDED.country_code, bank_swift_code = EXCLUDED.bank_swift_code;
 
 -- ---- employee_leave_history ----
-INSERT INTO employee_leave_history (id, employee_id, code, leave_type, from_date, to_date, duration, remarks)
-SELECT s.autonumber, e.user_id, s.code, s.leavetype, s.fromdate, s.todate, s.duration, s.remarks
+INSERT INTO employee_leave_history (employee_id, code, leave_type, from_date, to_date, duration, remarks)
+SELECT e.user_id, s.code, s.leavetype, s.fromdate, s.todate, s.duration, s.remarks
 FROM :"legacy_company_schema".employee_leave_history s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
-ON CONFLICT (id) DO NOTHING;
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
+WHERE NOT EXISTS (SELECT 1 FROM employee_leave_history x WHERE x.employee_id = e.user_id);
 SELECT setval(pg_get_serial_sequence('employee_leave_history', 'id'), (SELECT COALESCE(MAX(id), 0) + 1 FROM employee_leave_history), false);
 
 -- ---- settings_costcode_breaks ----
@@ -284,25 +291,28 @@ FROM :"legacy_company_schema".settings_tax_certificate_swz_eswatini s
 ON CONFLICT (payroll) DO UPDATE SET class_ind_no = EXCLUDED.class_ind_no, grade_tax_numberopa = EXCLUDED.grade_tax_numberopa, grade_tax_number_op_n = EXCLUDED.grade_tax_number_op_n;
 
 -- ---- equity ----
-INSERT INTO equity (id, employee_id, code, date_value, details, occ_cat, occ_lev)
-SELECT s.autonumber, e.user_id, s.code, s.datevalue, s.details, s.occcat, s.occlev
+INSERT INTO equity (employee_id, code, date_value, details, occ_cat, occ_lev)
+SELECT e.user_id, s.code, s.datevalue, s.details, s.occcat, s.occlev
 FROM :"legacy_company_schema".equity s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
-ON CONFLICT (id) DO NOTHING;
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
+WHERE NOT EXISTS (SELECT 1 FROM equity x WHERE x.employee_id = e.user_id);
 SELECT setval(pg_get_serial_sequence('equity', 'id'), (SELECT COALESCE(MAX(id), 0) + 1 FROM equity), false);
 
 -- ---- employment_tax_incentive ----
 INSERT INTO employment_tax_incentive (eti_year, period_no, employee_id, eti_claim, eti_hours, eti_ind_val, eti_wage_paid, monthly_min_wage, mtdeti_gross, mtd_gross)
 SELECT s.etiyear, s.periodno, e.user_id, s.eticlaim, s.etihours, s.etiindval, s.etiwagepaid, s.monthlyminwage, s.mtdetigross, s.mtdgross
 FROM :"legacy_company_schema".employment_tax_incentive s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 ON CONFLICT (eti_year, period_no, employee_id) DO UPDATE SET eti_claim = EXCLUDED.eti_claim, eti_hours = EXCLUDED.eti_hours, eti_ind_val = EXCLUDED.eti_ind_val, eti_wage_paid = EXCLUDED.eti_wage_paid, monthly_min_wage = EXCLUDED.monthly_min_wage, mtdeti_gross = EXCLUDED.mtdeti_gross, mtd_gross = EXCLUDED.mtd_gross;
 
 -- ---- fund_mibfa ----
 INSERT INTO fund_mibfa (company_id, employee_id, birth_date, new_birth_date, comment, discharge_date, engage_date, new_engage_date, id_no, new_id_no, leave_enhance_pay, name, new_name, no_shifts, no_weeks_work, pay_rate, new_pay_rate, pens_salary, trade_union, new_trade_union, wage_cat)
 SELECT s.company_id, e.user_id, s.birthdate, s.newbirthdate, s.comment, s.dischargedate, s.engagedate, s.newengagedate, s.idno, s.newidno, s.leaveenhancepay, s.name, s.newname, s.noshifts, s.noweekswork, s.payrate, s.newpayrate, s.penssalary, s.tradeunion, s.newtradeunion, s.wagecat
 FROM :"legacy_company_schema".fund_mibfa s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 ON CONFLICT (company_id, employee_id) DO UPDATE SET birth_date = EXCLUDED.birth_date, new_birth_date = EXCLUDED.new_birth_date, comment = EXCLUDED.comment, discharge_date = EXCLUDED.discharge_date, engage_date = EXCLUDED.engage_date, new_engage_date = EXCLUDED.new_engage_date, id_no = EXCLUDED.id_no, new_id_no = EXCLUDED.new_id_no, leave_enhance_pay = EXCLUDED.leave_enhance_pay, name = EXCLUDED.name, new_name = EXCLUDED.new_name, no_shifts = EXCLUDED.no_shifts, no_weeks_work = EXCLUDED.no_weeks_work, pay_rate = EXCLUDED.pay_rate, new_pay_rate = EXCLUDED.new_pay_rate, pens_salary = EXCLUDED.pens_salary, trade_union = EXCLUDED.trade_union, new_trade_union = EXCLUDED.new_trade_union, wage_cat = EXCLUDED.wage_cat;
 
 -- ---- fund_mibfa_header ----
@@ -315,7 +325,8 @@ ON CONFLICT (ordinal_no) DO UPDATE SET run_no = EXCLUDED.run_no;
 INSERT INTO fund_mibfa_other (company_id, employee_id, ordinal_no, apprentice, coll_barg_ee, coll_barg_er, dispute_ee, dispute_er, pen_ee, pen_er, pension, pen_vol_ee, pen_vol_er, prov_ee, prov_er, provident, prov_vol_ee, prov_vol_er, sched_cont_ee, sched_cont_er, schedule_ee, sick, sick_ee, sick_er, tech_fund, technology, temp_ee)
 SELECT s.company_id, e.user_id, s.ordinalno, s.apprentice, s.collbargee, s.collbarger, s.disputeee, s.disputeer, s.penee, s.pener, s.pension, s.penvolee, s.penvoler, s.provee, s.prover, s.provident, s.provvolee, s.provvoler, s.schedcontee, s.schedconter, s.scheduleee, s.sick, s.sickee, s.sicker, s.techfund, s.technology, s.tempee
 FROM :"legacy_company_schema".fund_mibfa_other s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 ON CONFLICT (company_id, employee_id, ordinal_no) DO UPDATE SET apprentice = EXCLUDED.apprentice, coll_barg_ee = EXCLUDED.coll_barg_ee, coll_barg_er = EXCLUDED.coll_barg_er, dispute_ee = EXCLUDED.dispute_ee, dispute_er = EXCLUDED.dispute_er, pen_ee = EXCLUDED.pen_ee, pen_er = EXCLUDED.pen_er, pension = EXCLUDED.pension, pen_vol_ee = EXCLUDED.pen_vol_ee, pen_vol_er = EXCLUDED.pen_vol_er, prov_ee = EXCLUDED.prov_ee, prov_er = EXCLUDED.prov_er, provident = EXCLUDED.provident, prov_vol_ee = EXCLUDED.prov_vol_ee, prov_vol_er = EXCLUDED.prov_vol_er, sched_cont_ee = EXCLUDED.sched_cont_ee, sched_cont_er = EXCLUDED.sched_cont_er, schedule_ee = EXCLUDED.schedule_ee, sick = EXCLUDED.sick, sick_ee = EXCLUDED.sick_ee, sick_er = EXCLUDED.sick_er, tech_fund = EXCLUDED.tech_fund, technology = EXCLUDED.technology, temp_ee = EXCLUDED.temp_ee;
 
 -- ---- settings_apso_tax_codes ----
@@ -345,7 +356,10 @@ ON CONFLICT (payroll) DO UPDATE SET uif_year = EXCLUDED.uif_year, uif_month = EX
 -- ---- settings_zaf_uif_company ----
 INSERT INTO settings_zaf_uif_company (uif_co_no, contact_email, tax_no, trading_name, uif_no)
 SELECT s.uifcono, s.contactemail, s.taxno, s.tradingname, s.uifno
-FROM :"legacy_company_schema".settings_zaf_uif_company s;
+FROM :"legacy_company_schema".settings_zaf_uif_company s
+WHERE NOT EXISTS (SELECT 1 FROM settings_zaf_uif_company x
+  WHERE (x.uif_co_no, x.contact_email, x.tax_no, x.trading_name, x.uif_no)
+    IS NOT DISTINCT FROM (s.uifcono::INTEGER, s.contactemail::TEXT, s.taxno::TEXT, s.tradingname::TEXT, s.uifno::INTEGER));
 
 -- ---- settings_zaf_uif_file ----
 INSERT INTO settings_zaf_uif_file (file_no, contact_email, contact_name, contact_tel_no, creators_name, creators_no, gen_no, medium_size, uif_file_path_name)
@@ -399,7 +413,8 @@ ON CONFLICT (page_no, line_number) DO UPDATE SET break_value = EXCLUDED.break_va
 INSERT INTO zaf_sars_work (employee_id, first_names, initials, irp5_no, selected, surname)
 SELECT e.user_id, s.firstnames, s.initials, s.irp5no, s.selected, s.surname
 FROM :"legacy_company_schema".zaf_sars_work s
-JOIN employees e ON e.id = 'emp-' || s.employeeno::text
+JOIN :"legacy_company_schema".employees le ON le.employeeno = s.employeeno
+JOIN employees e ON e.employee_code = :'payroll_number' || '/' || le.employeeid_f01::text
 ON CONFLICT (employee_id) DO UPDATE SET first_names = EXCLUDED.first_names, initials = EXCLUDED.initials, irp5_no = EXCLUDED.irp5_no, selected = EXCLUDED.selected, surname = EXCLUDED.surname;
 
 COMMIT;

@@ -44,6 +44,10 @@
 #>
 param(
     [string]$Schema,
+    # Docker name for the company schema. Defaults to $Schema. convert.ps1 passes
+    # the manifest's name, because PostgresImport always writes the same desktop
+    # name ('airplane') whichever client it imported.
+    [string]$SchemaTarget,
     [string]$DesktopHost,
     [int]   $DesktopPort,
     [string]$DesktopDb,
@@ -62,6 +66,7 @@ $ErrorActionPreference = 'Stop'
 $cfg = Import-PiproSettings
 
 if (-not $Schema)          { $Schema          = Get-PiproSetting $cfg 'INTERIM_SCHEMA' }
+if (-not $SchemaTarget)    { $SchemaTarget    = $Schema }
 if (-not $DesktopHost)     { $DesktopHost     = Get-PiproSetting $cfg 'INTERIM_HOST' }
 if (-not $DesktopPort)     { $DesktopPort     = [int](Get-PiproSetting $cfg 'INTERIM_PORT') }
 if (-not $DesktopDb)       { $DesktopDb       = Get-PiproSetting $cfg 'INTERIM_DB' }
@@ -142,17 +147,39 @@ function Sync-Schema {
     # through `sh -c` needs line continuations, and the quoting does not survive.
     # One transaction means the transient schema named $Source is never visible to
     # another session - which is what makes renaming 'pipro' safe.
+    #
+    # When renaming, a docker schema that already carries the SOURCE name (e.g. the
+    # parked 'airplane' rehearsal copy while converting another client) is moved
+    # aside for the restore and put back afterwards, not dropped.
     $pre  = "DROP SCHEMA IF EXISTS $Target CASCADE;"
     $post = ""
-    if ($Source -ne $Target) {
+    if ($Source -eq 'pipro') {
+        # Never preserve a stray docker 'pipro' - it shadows 'public' (see above).
         $pre  = "$pre DROP SCHEMA IF EXISTS $Source CASCADE;"
         $post = "ALTER SCHEMA $Source RENAME TO $Target;"
+    } elseif ($Source -ne $Target) {
+        $parked = "${Source}__parked"
+        $pre  = "$pre`nDROP SCHEMA IF EXISTS $parked CASCADE;" +
+                "`nDO `$`$ BEGIN IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = '$Source') THEN ALTER SCHEMA $Source RENAME TO $parked; END IF; END `$`$;"
+        $post = "ALTER SCHEMA $Source RENAME TO $Target;" +
+                "`nDO `$`$ BEGIN IF EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = '$parked') THEN ALTER SCHEMA $parked RENAME TO $Source; END IF; END `$`$;"
     }
+
+    # pre/post go in as files: the DO blocks' quotes and dollars do not survive sh -c.
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $preFile  = Join-Path $env:TEMP "pre-$Source.sql"
+    $postFile = Join-Path $env:TEMP "post-$Source.sql"
+    [IO.File]::WriteAllText($preFile,  "$pre`n",  $utf8)
+    [IO.File]::WriteAllText($postFile, "$post`n", $utf8)
+    cmd /c "docker cp `"$preFile`" ${dockerContainer}:/tmp/pre-$Source.sql >nul 2>&1"
+    cmd /c "docker cp `"$postFile`" ${dockerContainer}:/tmp/post-$Source.sql >nul 2>&1"
+    if ($LASTEXITCODE -ne 0) { Write-Host "    docker cp failed. Nothing was changed." -ForegroundColor Red; return $false }
 
     docker exec $dockerContainer sh -c @"
 set -e
 sed -i '$stripExpr' /tmp/interim-$Source.sql
-{ echo '$pre'; cat /tmp/interim-$Source.sql; echo '$post'; } > /tmp/restore-$Source.sql
+cat /tmp/pre-$Source.sql /tmp/interim-$Source.sql /tmp/post-$Source.sql > /tmp/restore-$Source.sql
+rm -f /tmp/pre-$Source.sql /tmp/post-$Source.sql
 export PGPASSWORD=$dockerPassword
 psql -U $dockerUser -d $dockerDb -v ON_ERROR_STOP=on -q --single-transaction -f /tmp/restore-$Source.sql
 rm -f /tmp/interim-$Source.sql /tmp/restore-$Source.sql
@@ -169,8 +196,18 @@ rm -f /tmp/interim-$Source.sql /tmp/restore-$Source.sql
 
 try {
     $env:PGPASSWORD = $DesktopPassword
-    $ok = (Sync-Schema -Source $Schema        -Target $Schema) -and `
-          (Sync-Schema -Source $payrollSource -Target $payrollTarget)
+    if ($payrollSource -eq $Schema) {
+        # PostgresImport wrote both halves into ONE schema: copy it once.
+        if ($payrollTarget -ne $SchemaTarget) {
+            Write-Host "==> Company and payroll halves share desktop schema '$Schema' but have different" -ForegroundColor Red
+            Write-Host "    docker targets ('$SchemaTarget' vs '$payrollTarget'). Use the same name for both." -ForegroundColor Red
+            exit 1
+        }
+        $ok = Sync-Schema -Source $Schema -Target $SchemaTarget
+    } else {
+        $ok = (Sync-Schema -Source $Schema        -Target $SchemaTarget) -and `
+              (Sync-Schema -Source $payrollSource -Target $payrollTarget)
+    }
 }
 finally {
     Remove-Item Env:\PGPASSWORD -ErrorAction SilentlyContinue
@@ -179,10 +216,10 @@ if (-not $ok) { exit 1 }
 
 Write-Host "`n==> Verifying ..." -ForegroundColor Cyan
 docker exec -e PGPASSWORD=$dockerPassword $dockerContainer psql -U $dockerUser -d $dockerDb `
-    -c "SELECT '$Schema' AS company_schema,
-               (SELECT count(*) FROM $Schema.employees)       AS employees,
-               (SELECT count(*) FROM $Schema.employee_alpha)  AS alpha,
-               (SELECT count(*) FROM $Schema.employee_amounts) AS amounts,
+    -c "SELECT '$SchemaTarget' AS company_schema,
+               (SELECT count(*) FROM $SchemaTarget.employees)       AS employees,
+               (SELECT count(*) FROM $SchemaTarget.employee_alpha)  AS alpha,
+               (SELECT count(*) FROM $SchemaTarget.employee_amounts) AS amounts,
                '$payrollTarget' AS payroll_schema,
                (SELECT count(*) FROM $payrollTarget.settings_calendar) AS calendar_periods;"
 
