@@ -26,6 +26,9 @@
 --   override        catalogue-overrides.csv names it (name only).
 --   CONFLICT_NAME   payrolls HOLDING VALUES disagree on the name. Blocking until
 --                   an override names it.
+--   CONFLICT_DUPLICATE_NAME  (set afterwards, section 2b) the name chosen here is
+--                   also chosen for another ordinal, and two or more of them hold
+--                   values. Blocking until an override renames all but one.
 --   same            every payroll that defines it agrees (case/spacing ignored).
 --   named_by_data   names differ, but only one name has values behind it - that
 --                   name wins; the others are unused labels.
@@ -178,6 +181,28 @@ CROSS JOIN payrolls p
 JOIN chosen c USING (catalogue, ordinal_no)
 LEFT JOIN migration.catalogue_override o
        ON o.tenant_slug = current_setting('mig.tenant_slug') AND o.catalogue = a.catalogue AND o.ordinal_no = a.ordinal_no;
+
+-- ---- 2b. One name, several ordinals
+-- The merge decides each ordinal on its own, so the SAME code sitting at
+-- different ordinals in different payrolls (lodge 295 vs ho/matla 321 'ytd-ben
+-- death') comes out as two ordinals with one name. Values stay on their ordinals,
+-- but anything that finds a code BY NAME - E/D line labels, reports, people -
+-- can no longer tell them apart. Blocking when two or more of those ordinals
+-- hold values; a note when they do not (legacy itself carries a few unused
+-- duplicates, and blocking those would stop a conversion for no reason).
+WITH dup AS (
+    SELECT catalogue, upper(btrim(regexp_replace(COALESCE(chosen_name, ''), '\s+', ' ', 'g'))) AS nkey,
+           count(*) AS ordinals, count(*) FILTER (WHERE data_rows > 0) AS with_values,
+           string_agg(ordinal_no::text, ',' ORDER BY ordinal_no) AS shared_with
+    FROM migration.catalogue_merge
+    WHERE tenant_slug = current_setting('mig.tenant_slug') AND btrim(COALESCE(chosen_name, '')) <> ''
+    GROUP BY 1, 2 HAVING count(*) > 1)
+UPDATE migration.catalogue_merge m
+   SET verdict = CASE WHEN d.with_values > 1 AND m.verdict <> 'CONFLICT_TYPE' THEN 'CONFLICT_DUPLICATE_NAME' ELSE m.verdict END,
+       notes   = concat_ws(', ', m.notes, 'name also at ' || d.shared_with)
+  FROM dup d
+ WHERE m.tenant_slug = current_setting('mig.tenant_slug') AND m.catalogue = d.catalogue
+   AND upper(btrim(regexp_replace(COALESCE(m.chosen_name, ''), '\s+', ' ', 'g'))) = d.nkey;
 
 -- ---- 3. Report
 \echo

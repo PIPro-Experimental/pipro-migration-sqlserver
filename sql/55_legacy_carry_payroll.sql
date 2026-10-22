@@ -9,13 +9,23 @@
 -- Employees resolve via employee_code = <payroll_number>/<EmployeeId_F01>, as 10 builds it.
 -- Several payrolls into ONE tenant: tables with no payroll column are shared by all of
 -- them - see conversion-plan.md "Company-side carry tables" for what that means per table.
--- Runner variables: :legacy_payroll_schema :legacy_company_schema :tenant_schema :payroll_number
+-- Runner variables: :legacy_payroll_schema :legacy_company_schema :tenant_schema
+-- (:payroll_number is read from the data at the top - see below)
 --
 -- Source identifiers are UNQUOTED LOWERCASE: DataDictionary's ColumnCollection
 -- lowercases every table/column name, so that is what the desktop DB contains.
--- CONFIRM: :payroll_number fills the payroll scoping column where the interim table had none (migration_map.legacy_payroll_number).
+-- CONFIRM: :payroll_number fills the payroll scoping column where the interim table had none (read from the interim employees.payroll_f04).
 -- ===========================================================================
 \set ON_ERROR_STOP on
+-- The legacy payroll number is READ FROM THE DATA, not supplied by the runner:
+-- every interim employees row carries it in payroll_f04, and one schema holds
+-- one payroll. A schema with no number, or with two, stops here rather than guess.
+SELECT CASE WHEN count(DISTINCT payroll_f04) = 1 AND count(payroll_f04) = count(*)
+            THEN min(payroll_f04)::text
+            ELSE ('no single payroll number in ' || :'legacy_company_schema' || '.employees.payroll_f04: '
+                  || COALESCE(string_agg(DISTINCT payroll_f04::text, ','), 'none'))::int::text
+       END AS payroll_number
+FROM :"legacy_company_schema".employees \gset
 BEGIN;
 SET search_path TO :"tenant_schema", public;
 

@@ -38,10 +38,16 @@ LANGUAGE sql IMMUTABLE AS $fn$
     SELECT CASE WHEN code ~ '^[0-9]+/' THEN split_part(code, '/', 1)::int END
 $fn$;
 
+-- ONE ROW PER (run snapshot pair, line), like 92's compare.value_diff. It used to
+-- FULL JOIN every line against EVERY other run snapshot (ON ... b.snap <> a.snap),
+-- so with more than two in compare, a line missing from B but present in some
+-- third snapshot paired with that one instead and the snap_b filter dropped it:
+-- a lost line vanished from the summary. snap_a / snap_b are always real labels
+-- now, never '(absent)': filter on BOTH, or a query sums every pair.
 CREATE OR REPLACE VIEW compare.run_value_diff AS
 SELECT
-    COALESCE(a.snap, '(absent)')               AS snap_a,
-    COALESCE(b.snap, '(absent)')               AS snap_b,
+    pr.snap_a,
+    pr.snap_b,
     COALESCE(a.employee_code, b.employee_code) AS employee_code,
     COALESCE(a.bank, b.bank)                   AS bank,
     COALESCE(a.ordinal_no, b.ordinal_no)       AS ordinal_no,
@@ -61,13 +67,21 @@ SELECT
              AND btrim(COALESCE(a.value_text,'')) IS DISTINCT FROM btrim(COALESCE(b.value_text,'')) THEN 'value_differs'
         ELSE 'match'
     END AS verdict
-FROM      compare.run_value a
-FULL JOIN compare.run_value b
-       ON  b.employee_code = a.employee_code
-      AND  b.bank          = a.bank
-      AND  b.ordinal_no    = a.ordinal_no
-      AND  b.usage_no      = a.usage_no
-      AND  b.snap <> a.snap;
+FROM (SELECT sa.snap AS snap_a, sb.snap AS snap_b
+        FROM compare.run_snapshot sa JOIN compare.run_snapshot sb ON sb.snap <> sa.snap) pr
+-- Every key either side of THIS pair holds, then each side looked up on it: a
+-- FULL JOIN scoped to the pair.
+CROSS JOIN LATERAL (
+    SELECT k.employee_code, k.bank, k.ordinal_no, k.usage_no
+      FROM compare.run_value k
+     WHERE k.snap IN (pr.snap_a, pr.snap_b)
+     GROUP BY k.employee_code, k.bank, k.ordinal_no, k.usage_no) key
+LEFT JOIN compare.run_value a
+       ON  a.snap = pr.snap_a AND a.employee_code = key.employee_code
+      AND  a.bank = key.bank  AND a.ordinal_no    = key.ordinal_no AND a.usage_no = key.usage_no
+LEFT JOIN compare.run_value b
+       ON  b.snap = pr.snap_b AND b.employee_code = key.employee_code
+      AND  b.bank = key.bank  AND b.ordinal_no    = key.ordinal_no AND b.usage_no = key.usage_no;
 
 -- ---------------------------------------------------------------------------
 -- Decide which gate applies, once, so every section below agrees.
@@ -81,9 +95,10 @@ WITH counts AS (
         (SELECT count(*) FROM compare.run_total WHERE snap = :'a') AS a_totals,
         (SELECT count(*) FROM compare.run_total WHERE snap = :'b') AS b_totals,
         -- Counted by joining the two master snapshots directly, NOT through
-        -- compare.value_diff. That view reports a one-sided row as snap_b
-        -- '(absent)', so filtering it by snap name drops exactly the rows that
+        -- compare.value_diff. That view used to report a one-sided row as snap_b
+        -- '(absent)', so filtering it by snap name dropped exactly the rows that
         -- matter most here - a value present in legacy and MISSING from pipro.
+        -- (Both diff views are now scoped to the pair; this direct join stays.)
         -- Promoted ordinals are excluded: they are absent by design, not lost.
         (SELECT count(*)
            FROM (SELECT * FROM compare.employee_value WHERE snap = :'master_a') ma
@@ -215,7 +230,7 @@ ORDER BY la.metric, abs(pb.value_num - la.value_num) DESC, la.employee_code;
 \echo '=== 3. Line summary by bank ==============================================='
 SELECT bank, verdict, count(*) AS rows, count(DISTINCT employee_code) AS employees
 FROM compare.run_value_diff
-WHERE snap_a IN (:'a','(absent)') AND snap_b IN (:'b','(absent)')
+WHERE snap_a = :'a' AND snap_b = :'b'
   AND (SELECT gate FROM _gate) NOT IN ('nothing_to_compare','pipro_run_missing','legacy_run_missing')
 GROUP BY bank, verdict ORDER BY bank, verdict;
 

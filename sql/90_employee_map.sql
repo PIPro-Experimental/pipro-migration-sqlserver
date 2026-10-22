@@ -48,6 +48,16 @@
 --   CHOOSE  = a genuine decision.
 -- ===========================================================================
 \set ON_ERROR_STOP on
+-- ONE PAYROLL PER RUN. A multi-payroll tenant is mapped one payroll at a time
+-- (compare_report.ps1 loops over the manifest), so each run replaces and reports
+-- only ITS payroll's rows - otherwise every other payroll's employees would show
+-- as 'pipro_only'. The payroll is read from the source, which holds exactly one.
+SELECT CASE WHEN count(DISTINCT payroll_f04) = 1 AND count(payroll_f04) = count(*)
+            THEN min(payroll_f04)::text
+            ELSE ('no single payroll number in ' || :'legacy_company_schema' || '.employees.payroll_f04: '
+                  || COALESCE(string_agg(DISTINCT payroll_f04::text, ','), 'none'))::int::text
+       END AS payroll_number
+FROM :"legacy_company_schema".employees \gset
 BEGIN;
 
 CREATE SCHEMA IF NOT EXISTS compare;
@@ -70,8 +80,13 @@ CREATE TABLE IF NOT EXISTS compare.employee_map (
     PRIMARY KEY (tenant_schema, employee_code)
 );
 
--- Idempotent: this tenant's rows are rebuilt from scratch on every run.
-DELETE FROM compare.employee_map WHERE tenant_schema = :'tenant_schema';
+-- CREATE IF NOT EXISTS never adds a column to an existing table.
+ALTER TABLE compare.employee_map ADD COLUMN IF NOT EXISTS payroll INTEGER;
+
+-- Idempotent: this tenant's rows FOR THIS PAYROLL are rebuilt on every run
+-- (plus any rows from before the payroll column existed).
+DELETE FROM compare.employee_map
+WHERE tenant_schema = :'tenant_schema' AND (payroll = :payroll_number OR payroll IS NULL);
 
 -- ---------------------------------------------------------------------------
 -- Section 1: build the map. FULL OUTER JOIN so a break in EITHER direction
@@ -82,10 +97,11 @@ DELETE FROM compare.employee_map WHERE tenant_schema = :'tenant_schema';
 -- canonicalising expression on BOTH sides (and nowhere else).
 -- ---------------------------------------------------------------------------
 INSERT INTO compare.employee_map (
-    tenant_schema, employee_code, interim_empno, pipro_employee_id,
+    tenant_schema, payroll, employee_code, interim_empno, pipro_employee_id,
     pipro_user_id, surname, status, note)
 SELECT
     :'tenant_schema',
+    :payroll_number,
     COALESCE(btrim(a.payroll_f04::text || '/' || a.employeeid_f01), btrim(t.employee_code)),
     a.employeeno,
     t.id,
@@ -105,7 +121,13 @@ SELECT
         WHEN t.id         IS NULL  THEN 'in the interim source but NOT imported — see section 2'
     END
 FROM      :"legacy_company_schema".employees a
-FULL JOIN :"tenant_schema".employees        t
+FULL JOIN (
+    -- this payroll's tenant employees, plus any whose code carries no payroll
+    -- prefix at all (renamed or hand-made) - those cannot be attributed, so
+    -- every payroll's run reports them rather than none
+    SELECT * FROM :"tenant_schema".employees
+    WHERE split_part(employee_code, '/', 1) = :'payroll_number' OR employee_code !~ '^[0-9]+/'
+) t
        ON btrim(t.employee_code) = btrim(a.payroll_f04::text || '/' || a.employeeid_f01);
 
 -- legacy_empno is filled HERE, not only by 93. In compare_report, 93 runs first
@@ -123,7 +145,7 @@ CREATE TABLE IF NOT EXISTS compare.legacy_imf
 UPDATE compare.employee_map m
    SET legacy_empno = l.empno::text
   FROM compare.legacy_imf l
- WHERE m.tenant_schema = :'tenant_schema'
+ WHERE m.tenant_schema = :'tenant_schema' AND m.payroll = :payroll_number
    AND btrim(m.employee_code) = btrim(l.payroll::text || '/' || l.empno::text);
 
 COMMIT;
@@ -134,7 +156,7 @@ COMMIT;
 \echo ''
 \echo '=== 1. Map summary ========================================================'
 SELECT status, count(*) AS employees
-FROM compare.employee_map WHERE tenant_schema = :'tenant_schema'
+FROM compare.employee_map WHERE tenant_schema = :'tenant_schema' AND payroll = :payroll_number
 GROUP BY status ORDER BY status;
 
 \echo ''
@@ -146,14 +168,14 @@ GROUP BY status ORDER BY status;
 -- failure, and it is the check the whole exercise exists for.
 SELECT employee_code, interim_empno, surname
 FROM compare.employee_map
-WHERE tenant_schema = :'tenant_schema' AND status = 'interim_only'
+WHERE tenant_schema = :'tenant_schema' AND payroll = :payroll_number AND status = 'interim_only'
 ORDER BY interim_empno;
 
 \echo ''
 \echo '=== 3. Rows in pipro with no source counterpart ============================'
 SELECT employee_code, pipro_employee_id, pipro_user_id, surname, note
 FROM compare.employee_map
-WHERE tenant_schema = :'tenant_schema' AND status = 'pipro_only'
+WHERE tenant_schema = :'tenant_schema' AND payroll = :payroll_number AND status = 'pipro_only'
 ORDER BY employee_code;
 
 \echo ''
@@ -190,7 +212,7 @@ SELECT count(*) AS total,
             ELSE 'BROKEN — legacy-keyed joins are mismatching rows; use the map'
        END AS verdict
 FROM compare.employee_map
-WHERE tenant_schema = :'tenant_schema' AND status = 'matched';
+WHERE tenant_schema = :'tenant_schema' AND payroll = :payroll_number AND status = 'matched';
 
 \echo ''
 \echo '=== 7. Orphan child rows in the interim source ============================='

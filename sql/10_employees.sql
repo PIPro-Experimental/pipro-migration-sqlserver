@@ -6,7 +6,7 @@
 --                    → employee_status_history        (payable gate)
 --
 -- Runner variables: :legacy_company_schema :legacy_payroll_schema
---                   :tenant_schema :target_payroll_id :payroll_number
+--                   :tenant_schema :target_payroll_id
 --                   :cutover :system_user_id     (see run-migration.ps1)
 --
 -- Target columns/types are VERBATIM from the live schema (real). Source column
@@ -24,6 +24,15 @@
 -- alpha EmployeeId_F01 → employee_code.
 -- ===========================================================================
 \set ON_ERROR_STOP on
+-- The legacy payroll number is READ FROM THE DATA, not supplied by the runner:
+-- every interim employees row carries it in payroll_f04, and one schema holds
+-- one payroll. A schema with no number, or with two, stops here rather than guess.
+SELECT CASE WHEN count(DISTINCT payroll_f04) = 1 AND count(payroll_f04) = count(*)
+            THEN min(payroll_f04)::text
+            ELSE ('no single payroll number in ' || :'legacy_company_schema' || '.employees.payroll_f04: '
+                  || COALESCE(string_agg(DISTINCT payroll_f04::text, ','), 'none'))::int::text
+       END AS payroll_number
+FROM :"legacy_company_schema".employees \gset
 BEGIN;
 SET search_path TO :"tenant_schema", public;
 
@@ -52,20 +61,22 @@ DO $$
 DECLARE m record;
 BEGIN
   FOR m IN
-    SELECT legacy_company_schema AS s, legacy_payroll_number AS p
+    SELECT legacy_company_schema AS s
     FROM public.migration_map
     WHERE 'tenant_' || tenant_slug = current_setting('mig.tenant_schema')
     UNION   -- the schema being loaded, even if the map does not list it
-    SELECT current_setting('mig.legacy_company_schema'), current_setting('mig.payroll_number')::int
+    SELECT current_setting('mig.legacy_company_schema')
   LOOP
+    -- Each payroll's number comes from its own rows (payroll_f04), like the
+    -- one being loaded, so the ranking never depends on a typed-in value.
     EXECUTE format($q$
       INSERT INTO _email_holder
-      SELECT $1, e.employeeid_f01::text, lower(btrim(e.emailaddress_f40)),
-             d.term IS NULL OR d.term > $2::date, d.term, NULLIF(e.engagedate_d931::text, '')::date
+      SELECT e.payroll_f04, e.employeeid_f01::text, lower(btrim(e.emailaddress_f40)),
+             d.term IS NULL OR d.term > $1::date, d.term, NULLIF(e.engagedate_d931::text, '')::date
       FROM %I.employees e
       CROSS JOIN LATERAL (SELECT NULLIF(e.dischargedate_d932::text, '')::date AS term) d
       WHERE btrim(COALESCE(e.emailaddress_f40, '')) <> ''$q$, m.s)
-    USING m.p, left(current_setting('mig.cutover'), 10);
+    USING left(current_setting('mig.cutover'), 10);
   END LOOP;
 END $$;
 
@@ -101,6 +112,12 @@ SELECT
     e.surname_f02                                    AS last_name,
     e.givennames_f21                                 AS first_name,
     e.identity_f12::text                             AS id_number,
+    -- Passport: promoted to F45 in hop 1 from the slot PW_Parm_IRP5NonFinancial.
+    -- PassportRefNo points at. The country of issue is PW_ImfC.PassportCountry
+    -- (F46), ISO alpha-3 as SARS field 3075 wants it. Legacy only exports the
+    -- passport when there is NO ID number, but both are carried here, as stored.
+    NULLIF(btrim(e.passportnumber_f45), '')          AS passport_number,
+    upper(NULLIF(btrim(e.passportcountry_f46), ''))  AS passport_country_code,
     e.birthdate_d930::text                           AS date_of_birth,      -- source sql format YYYY-MM-DD not null
     e.engagedate_d931::text                          AS hired_at,           -- source sql format YYYY-MM-DD not null
     NULLIF(e.dischargedate_d932::text, '')           AS terminated_at,      -- source sql format YYYY-MM-DD mostly null
@@ -208,14 +225,21 @@ INSERT INTO employees (
     id, user_id, employee_code, first_name, last_name, id_number,
     hired_at, terminated_at, salary_current_minor, currency, created_at,
     date_of_birth, gender, title, nationality_country_code, marital_status, preferred_name,
-    occupation, category)
+    occupation, category, passport_number, passport_country_code)
 SELECT
     'emp-' || :'payroll_number' || '-' || s.legacy_empno, m.user_id, s.employee_code, s.first_name, s.last_name,
     s.id_number, s.hired_at, s.terminated_at, 0, s.currency,   -- salary display set by 20_recurring
     :'cutover', s.date_of_birth, s.gender, s.title, s.nationality_country_code,
-    s.marital_status, NULL, s.occupation, s.category
+    s.marital_status, NULL, s.occupation, s.category, s.passport_number, s.passport_country_code
 FROM _src s JOIN _idmap m ON m.legacy_empno = s.legacy_empno
 ON CONFLICT (employee_code) DO NOTHING;
+
+-- Passports SARS would reject at year-end: no country of issue, or a country
+-- that is not three letters. Loaded as stored; listed so they get fixed.
+SELECT employee_code, passport_number, passport_country_code
+FROM _src
+WHERE passport_number IS NOT NULL
+  AND (passport_country_code IS NULL OR passport_country_code !~ '^[A-Z]{3}$');
 
 -- ---------------------------------------------------------------------------
 -- Step 4: employee_contracts — bitemporal fan-out. One current monthly

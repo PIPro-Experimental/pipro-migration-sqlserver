@@ -21,8 +21,10 @@
 #                          it shadows 'public' for the app's own database user.
 #   tenant_slug            target tenant (tenant_<slug>), already provisioned
 #   target_payroll_id      target payrolls.id in that tenant, already created
-#   legacy_payroll_number  the interim/legacy Payroll number. VERIFIED against the
-#                          data after the refresh, not trusted.
+#   legacy_payroll_number  OPTIONAL for current rows - leave it blank and it is
+#                          read from the data (employees.payroll_f04) after the
+#                          refresh. If you fill it in, it is checked against the
+#                          data. Required for history rows.
 #   role                   current | history
 #   tax_year               required for history rows, blank for current
 #

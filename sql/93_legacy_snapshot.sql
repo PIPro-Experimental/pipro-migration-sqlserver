@@ -66,25 +66,27 @@ CREATE TABLE compare.promoted_ordinal (
     ordinal_no     INTEGER NOT NULL,
     legacy_name    TEXT,
     target_column  TEXT NOT NULL,
+    -- The system-neutral name compare.employee_promoted files the value under.
+    field          TEXT NOT NULL,
     rows_in_legacy INTEGER,
     PRIMARY KEY (payroll, bank, ordinal_no)
 );
 
-INSERT INTO compare.promoted_ordinal (payroll, bank, ordinal_no, legacy_name, target_column)
+INSERT INTO compare.promoted_ordinal (payroll, bank, ordinal_no, legacy_name, target_column, field)
 SELECT p.payroll, 'V', p.sex_ind,
-       'indicator ' || p.sex_ind || ' (SexInd)', 'employees.gender_f22'
+       'indicator ' || p.sex_ind || ' (SexInd)', 'employees.gender_f22', 'gender'
   FROM compare.legacy_promoted p WHERE p.sex_ind > 0
 UNION ALL
 SELECT p.payroll, 'V', p.empcategory_ind,
-       'indicator ' || p.empcategory_ind || ' (EmpCategoryInd)', 'employees.category_f13'
+       'indicator ' || p.empcategory_ind || ' (EmpCategoryInd)', 'employees.category_f13', 'category'
   FROM compare.legacy_promoted p WHERE p.empcategory_ind > 0
 UNION ALL
 SELECT p.payroll, 'V', p.id_ref + 100,
-       'refno ' || p.id_ref || ' (IdRef)', 'employees.identity_f12'
+       'refno ' || p.id_ref || ' (IdRef)', 'employees.identity_f12', 'id_number'
   FROM compare.legacy_promoted p WHERE p.id_ref > 0
 UNION ALL
 SELECT p.payroll, 'V', p.passport_refno + 100,
-       'refno ' || p.passport_refno || ' (PassportRefNo)', 'employees.passportnumber_f45'
+       'refno ' || p.passport_refno || ' (PassportRefNo)', 'employees.passportnumber_f45', 'passport_number'
   FROM compare.legacy_promoted p WHERE p.passport_refno > 0
 ON CONFLICT (payroll, bank, ordinal_no) DO NOTHING;
 
@@ -153,6 +155,34 @@ SELECT :'snap', btrim(m.payroll::text || '/' || m.empno::text), 'D', d.ordinalno
        (DATE '1799-12-31' + d.datevalue)::text, 'PW_Dates'
 FROM compare.legacy_dates d
 JOIN compare.legacy_imf   m ON m.empno = d.empno
+ON CONFLICT DO NOTHING;
+
+-- PROMOTED VALUES, filed by field name so 92 can check them against the employee
+-- COLUMNS they became downstream - excluding the slots from the value diff (the
+-- 'promoted' verdict) is only safe if something proves the values arrived. Same
+-- DDL as 91, which may not have run yet on this database.
+-- Plus the passport's country of issue, which legacy keeps on PW_ImfC rather
+-- than in a slot.
+CREATE TABLE IF NOT EXISTS compare.employee_promoted (
+    snap          TEXT NOT NULL REFERENCES compare.snapshot(snap) ON DELETE CASCADE,
+    employee_code TEXT NOT NULL,
+    field         TEXT NOT NULL CHECK (field IN ('category','gender','id_number','passport_number','passport_country')),
+    value_text    TEXT,               -- as stored; 92 normalises when comparing
+    origin        TEXT NOT NULL,
+    PRIMARY KEY (snap, employee_code, field)
+);
+
+INSERT INTO compare.employee_promoted (snap, employee_code, field, value_text, origin)
+SELECT :'snap', v.employee_code, p.field, v.value_text, v.origin
+FROM compare.employee_value v
+JOIN compare.promoted_ordinal p
+  ON p.bank = v.bank AND p.ordinal_no = v.ordinal_no
+ AND p.payroll = compare.code_payroll(v.employee_code)
+WHERE v.snap = :'snap'
+UNION ALL
+SELECT :'snap', btrim(m.payroll::text || '/' || m.empno::text), 'passport_country', m.passport_country, 'PW_ImfC'
+FROM compare.legacy_imf m
+WHERE btrim(COALESCE(m.passport_country, '')) <> ''
 ON CONFLICT DO NOTHING;
 
 -- Fill the legacy key on the map now that we have PW_IMF. The spine is the

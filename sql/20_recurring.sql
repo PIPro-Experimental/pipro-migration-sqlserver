@@ -45,6 +45,15 @@
 -- and data-driven off the catalogue.
 -- ===========================================================================
 \set ON_ERROR_STOP on
+-- The legacy payroll number is READ FROM THE DATA, not supplied by the runner:
+-- every interim employees row carries it in payroll_f04, and one schema holds
+-- one payroll. A schema with no number, or with two, stops here rather than guess.
+SELECT CASE WHEN count(DISTINCT payroll_f04) = 1 AND count(payroll_f04) = count(*)
+            THEN min(payroll_f04)::text
+            ELSE ('no single payroll number in ' || :'legacy_company_schema' || '.employees.payroll_f04: '
+                  || COALESCE(string_agg(DISTINCT payroll_f04::text, ','), 'none'))::int::text
+       END AS payroll_number
+FROM :"legacy_company_schema".employees \gset
 BEGIN;
 SET search_path TO :"tenant_schema", public;
 
@@ -52,6 +61,11 @@ CREATE SCHEMA IF NOT EXISTS migration;
 CREATE TABLE IF NOT EXISTS migration.ytd_takeon (
     tenant TEXT NOT NULL, employee_id BIGINT NOT NULL, legacy_empno TEXT NOT NULL,
     code TEXT NOT NULL, amount_minor BIGINT NOT NULL, loaded_at TEXT NOT NULL);
+-- The ordinal is the value's real address; the name alone is ambiguous once
+-- two ordinals share one (e.g. a multi-payroll tenant where the same code sits
+-- at different ordinals in different payrolls). NULL only on rows loaded before
+-- this column existed.
+ALTER TABLE migration.ytd_takeon ADD COLUMN IF NOT EXISTS ordinal_no INTEGER;
 CREATE TABLE IF NOT EXISTS migration.amount_quarantine (
     tenant TEXT NOT NULL, legacy_empno TEXT NOT NULL, code TEXT, codetype TEXT,
     amount_minor BIGINT, reason TEXT NOT NULL, loaded_at TEXT NOT NULL);
@@ -128,8 +142,8 @@ FROM _amt WHERE employee_id IS NOT NULL AND codetype IN ('B', 'T')
 ON CONFLICT (employee_id, ordinal_no) DO NOTHING;
 
 -- Y → YTD take-on staging (always mid-year; never dropped).
-INSERT INTO migration.ytd_takeon (tenant, employee_id, legacy_empno, code, amount_minor, loaded_at)
-SELECT :'tenant_schema', employee_id, legacy_empno, name, amount_minor, :'cutover'
+INSERT INTO migration.ytd_takeon (tenant, employee_id, legacy_empno, code, ordinal_no, amount_minor, loaded_at)
+SELECT :'tenant_schema', employee_id, legacy_empno, name, ordinal_no, amount_minor, :'cutover'
 FROM _amt WHERE employee_id IS NOT NULL AND codetype = 'Y';
 
 -- Any OTHER recognised codetype (H,S,J,…) → deprecated, RAW. ×100 reverses

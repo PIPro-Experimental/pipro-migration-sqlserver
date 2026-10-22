@@ -11,10 +11,19 @@
 --   age_band        <- 'derived' (pack computes from date_of_birth)
 --   effective_from  <- engagement date (same anchor as the contract row)
 --
--- Runner variables: :legacy_company_schema :tenant_schema :payroll_number
+-- Runner variables: :legacy_company_schema :tenant_schema
 --                   :cutover :system_user_id
 -- ===========================================================================
 \set ON_ERROR_STOP on
+-- The legacy payroll number is READ FROM THE DATA, not supplied by the runner:
+-- every interim employees row carries it in payroll_f04, and one schema holds
+-- one payroll. A schema with no number, or with two, stops here rather than guess.
+SELECT CASE WHEN count(DISTINCT payroll_f04) = 1 AND count(payroll_f04) = count(*)
+            THEN min(payroll_f04)::text
+            ELSE ('no single payroll number in ' || :'legacy_company_schema' || '.employees.payroll_f04: '
+                  || COALESCE(string_agg(DISTINCT payroll_f04::text, ','), 'none'))::int::text
+       END AS payroll_number
+FROM :"legacy_company_schema".employees \gset
 BEGIN;
 SET search_path TO :"tenant_schema", public;
 

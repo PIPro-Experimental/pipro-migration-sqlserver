@@ -68,8 +68,14 @@ function Import-PiproManifest
         $where = "row '$($r.source_db)'"
 
         foreach ($col in @('source_db','company_schema','payroll_schema','tenant_slug',
-                           'target_payroll_id','legacy_payroll_number','role')) {
+                           'target_payroll_id','role')) {
             if (-not $r.$col) { $problems.Add("${where}: $col is empty") }
+        }
+        # A CURRENT row may leave the payroll number blank: convert.ps1 reads it
+        # from the imported data. A history row is never imported here, so it
+        # needs the number to say which current payroll it belongs to.
+        if ($r.role -eq 'history' -and -not $r.legacy_payroll_number) {
+            $problems.Add("${where}: a history row needs a legacy_payroll_number")
         }
 
         if ($r.role -notin @('current','history')) {
@@ -124,7 +130,9 @@ function Import-PiproManifest
     # legitimately reuse both (they describe the same payroll in an earlier year).
     $current = @($rows | Where-Object { $_.role -eq 'current' })
     Add-DuplicateProblem $current 'tenant/target_payroll_id'     { "$($_.tenant_slug)/$($_.target_payroll_id)" }
-    Add-DuplicateProblem $current 'tenant/legacy_payroll_number' { "$($_.tenant_slug)/$($_.legacy_payroll_number)" }
+    # Blank numbers are filled from the data by convert.ps1, which re-checks this.
+    Add-DuplicateProblem @($current | Where-Object { $_.legacy_payroll_number }) 'tenant/legacy_payroll_number' {
+        "$($_.tenant_slug)/$($_.legacy_payroll_number)" }
 
     # History rows: one row per (tenant, payroll, tax year).
     $history = @($rows | Where-Object { $_.role -eq 'history' })
@@ -133,7 +141,11 @@ function Import-PiproManifest
     }
 
     # A history row must describe a payroll that is actually being converted.
+    # Not checkable while a current row of that tenant leaves its number to the
+    # data - history is skipped by convert.ps1 anyway (not implemented).
     foreach ($h in $history) {
+        $tenantCurrent = @($current | Where-Object { $_.tenant_slug -eq $h.tenant_slug })
+        if ($tenantCurrent | Where-Object { -not $_.legacy_payroll_number }) { continue }
         if (-not ($current | Where-Object {
                 $_.tenant_slug -eq $h.tenant_slug -and
                 $_.legacy_payroll_number -eq $h.legacy_payroll_number })) {

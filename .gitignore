@@ -7,6 +7,9 @@ payrolls.csv
 # ... and its catalogue overrides (copy catalogue-overrides.example.csv).
 catalogue-overrides.csv
 
+# Report output from compare_report.ps1 - names real employees.
+/reports/
+
 # Local environment overrides — NEVER commit real DB credentials.
 .env
 .env.local

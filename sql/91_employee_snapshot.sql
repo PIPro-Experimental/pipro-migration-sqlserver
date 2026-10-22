@@ -33,6 +33,15 @@
 -- raw 4dp NUMERIC (carried as-is) — see 20_recurring.
 -- ===========================================================================
 \set ON_ERROR_STOP on
+-- ONE PAYROLL PER RUN (see 90): the pipro side keeps only this payroll's mapped
+-- employees, so a multi-payroll tenant yields one comparable snapshot per payroll.
+-- The payroll is read from the source schema, which holds exactly one.
+SELECT CASE WHEN count(DISTINCT payroll_f04) = 1 AND count(payroll_f04) = count(*)
+            THEN min(payroll_f04)::text
+            ELSE ('no single payroll number in ' || :'legacy_company_schema' || '.employees.payroll_f04: '
+                  || COALESCE(string_agg(DISTINCT payroll_f04::text, ','), 'none'))::int::text
+       END AS payroll_number
+FROM :"legacy_company_schema".employees \gset
 BEGIN;
 
 CREATE SCHEMA IF NOT EXISTS compare;
@@ -69,6 +78,20 @@ CREATE TABLE IF NOT EXISTS compare.employee_value_unmapped (
     reason        TEXT NOT NULL
 );
 
+-- PROMOTED VALUES - the legacy slots hop 1 moved into first-class employee
+-- columns (category, gender, ID number, passport) plus the passport's country of
+-- issue. They are absent from the V bank downstream by design, so 92 checks them
+-- here instead, column against column. Captured AS STORED; 92 normalises.
+-- Same DDL as 93.
+CREATE TABLE IF NOT EXISTS compare.employee_promoted (
+    snap          TEXT NOT NULL REFERENCES compare.snapshot(snap) ON DELETE CASCADE,
+    employee_code TEXT NOT NULL,
+    field         TEXT NOT NULL CHECK (field IN ('category','gender','id_number','passport_number','passport_country')),
+    value_text    TEXT,
+    origin        TEXT NOT NULL,
+    PRIMARY KEY (snap, employee_code, field)
+);
+
 -- Idempotent: re-capturing a label replaces it.
 DELETE FROM compare.snapshot WHERE snap = :'snap';
 INSERT INTO compare.snapshot (snap, system, phase, tenant_schema, source_schema)
@@ -99,6 +122,19 @@ SELECT :'snap', btrim(e.payroll_f04::text || '/' || e.employeeid_f01), 'D', d.or
 FROM :"legacy_company_schema".employee_dates d
 JOIN :"legacy_company_schema".employees e ON e.employeeno = d.employeeno
 WHERE :'system' = 'interim'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO compare.employee_promoted (snap, employee_code, field, value_text, origin)
+SELECT :'snap', btrim(e.payroll_f04::text || '/' || e.employeeid_f01), f.field, f.value, 'employees.' || f.col
+FROM :"legacy_company_schema".employees e
+CROSS JOIN LATERAL (VALUES
+    ('category',         e.category_f13::text,        'category_f13'),
+    ('gender',           e.gender_f22::text,          'gender_f22'),
+    ('id_number',        e.identity_f12::text,        'identity_f12'),
+    ('passport_number',  e.passportnumber_f45::text,  'passportnumber_f45'),
+    ('passport_country', e.passportcountry_f46::text, 'passportcountry_f46')
+) AS f(field, value, col)
+WHERE :'system' = 'interim' AND btrim(COALESCE(f.value, '')) <> ''
 ON CONFLICT DO NOTHING;
 
 -- ---------------------------------------------------------------------------
@@ -136,14 +172,20 @@ FROM (
        AND (SELECT count(*) FROM :"tenant_schema".settings_employee_amounts d WHERE d.name = x.label) = 1
     UNION ALL
     -- Y: still in migration staging until ytd_takeon is materialised
+    -- by the stored ordinal; the name lookup is only for rows loaded before
+    -- ytd_takeon carried one (and only when the name is unambiguous)
+    SELECT y.employee_id, y.ordinal_no, y.amount_minor::numeric / 100, 'migration.ytd_takeon'
+      FROM migration.ytd_takeon y
+     WHERE y.tenant = :'tenant_schema' AND y.ordinal_no IS NOT NULL
+    UNION ALL
     SELECT y.employee_id, c.ordinal_no, y.amount_minor::numeric / 100, 'migration.ytd_takeon'
       FROM migration.ytd_takeon y
       JOIN :"tenant_schema".settings_employee_amounts c ON c.name = y.code
-     WHERE y.tenant = :'tenant_schema'
+     WHERE y.tenant = :'tenant_schema' AND y.ordinal_no IS NULL
        AND (SELECT count(*) FROM :"tenant_schema".settings_employee_amounts d WHERE d.name = y.code) = 1
 ) src
 JOIN compare.employee_map m
-  ON m.tenant_schema = :'tenant_schema' AND m.pipro_user_id = src.employee_id
+  ON m.tenant_schema = :'tenant_schema' AND m.payroll = :payroll_number AND m.pipro_user_id = src.employee_id
 WHERE :'system' = 'pipro'
 ON CONFLICT DO NOTHING;
 
@@ -151,7 +193,7 @@ INSERT INTO compare.employee_value (snap, employee_code, bank, ordinal_no, value
 SELECT :'snap', m.employee_code, 'V', v.ordinal_no, v.value, 'employee_alpha'
 FROM :"tenant_schema".employee_alpha v
 JOIN compare.employee_map m
-  ON m.tenant_schema = :'tenant_schema' AND m.pipro_user_id = v.employee_id
+  ON m.tenant_schema = :'tenant_schema' AND m.payroll = :payroll_number AND m.pipro_user_id = v.employee_id
 WHERE :'system' = 'pipro'
 ON CONFLICT DO NOTHING;
 
@@ -159,8 +201,27 @@ INSERT INTO compare.employee_value (snap, employee_code, bank, ordinal_no, value
 SELECT :'snap', m.employee_code, 'D', d.ordinal_no, d.value, 'employee_dates'
 FROM :"tenant_schema".employee_dates d
 JOIN compare.employee_map m
-  ON m.tenant_schema = :'tenant_schema' AND m.pipro_user_id = d.employee_id
+  ON m.tenant_schema = :'tenant_schema' AND m.payroll = :payroll_number AND m.pipro_user_id = d.employee_id
 WHERE :'system' = 'pipro'
+ON CONFLICT DO NOTHING;
+
+-- Read through to_jsonb(e) so a tenant whose hrm-core predates a column (the
+-- passport pair, 2026_10_21_090000) still snapshots: the missing column reads as
+-- NULL and 92 reports its values as lost, which is exactly what they are.
+INSERT INTO compare.employee_promoted (snap, employee_code, field, value_text, origin)
+SELECT :'snap', m.employee_code, f.field, j.row ->> f.col, 'employees.' || f.col
+FROM :"tenant_schema".employees e
+JOIN compare.employee_map m
+  ON m.tenant_schema = :'tenant_schema' AND m.payroll = :payroll_number AND m.pipro_user_id = e.user_id
+CROSS JOIN LATERAL (SELECT to_jsonb(e) AS row) j
+CROSS JOIN LATERAL (VALUES
+    ('category',         'category'),
+    ('gender',           'gender'),
+    ('id_number',        'id_number'),
+    ('passport_number',  'passport_number'),
+    ('passport_country', 'passport_country_code')
+) AS f(field, col)
+WHERE :'system' = 'pipro' AND btrim(COALESCE(j.row ->> f.col, '')) <> ''
 ON CONFLICT DO NOTHING;
 
 -- Park the E/D rows whose label does not resolve to exactly one ordinal.
@@ -176,7 +237,7 @@ FROM (
       FROM :"tenant_schema".employee_amount_deductions WHERE ended_at IS NULL
 ) x
 JOIN compare.employee_map m
-  ON m.tenant_schema = :'tenant_schema' AND m.pipro_user_id = x.employee_id
+  ON m.tenant_schema = :'tenant_schema' AND m.payroll = :payroll_number AND m.pipro_user_id = x.employee_id
 WHERE :'system' = 'pipro'
   AND (SELECT count(*) FROM :"tenant_schema".settings_employee_amounts d WHERE d.name = x.label) <> 1;
 

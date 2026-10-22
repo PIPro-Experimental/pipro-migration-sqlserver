@@ -40,8 +40,10 @@ param(
     [Parameter(Mandatory = $true)][string]$TenantSlug,
     [switch]$SkipReset,
     [string]$ManifestPath,
-    [string]$OverridesPath = (Join-Path $PSScriptRoot 'catalogue-overrides.csv')
+    [string]$OverridesPath
 )
+# Resolved here, not as the parameter default: PS 5.1 leaves $PSScriptRoot empty inside param().
+if (-not $OverridesPath) { $OverridesPath = Join-Path $PSScriptRoot 'catalogue-overrides.csv' }
 $ErrorActionPreference = 'Stop'
 
 . "$PSScriptRoot\load-settings.ps1"
@@ -99,7 +101,8 @@ Write-Host ""
 Write-Host (" {0,-22} {1,-16} {2,-16} {3,8} {4,8}" -f 'source database','company schema','payroll schema','payroll','target')
 foreach ($r in $current) {
     Write-Host (" {0,-22} {1,-16} {2,-16} {3,8} {4,8}" -f `
-        $r.source_db, $r.company_schema, $r.payroll_schema, $r.legacy_payroll_number, $r.target_payroll_id)
+        $r.source_db, $r.company_schema, $r.payroll_schema,
+        $(if ($r.legacy_payroll_number) { $r.legacy_payroll_number } else { '(data)' }), $r.target_payroll_id)
 }
 Write-Host ""
 Write-Host " $($current.Count) payroll(s) to convert." -ForegroundColor Green
@@ -153,7 +156,7 @@ foreach ($r in $current) {
     $n++
     Write-Host ""
     Write-Host "===========================================================================" -ForegroundColor Cyan
-    Write-Host " PAYROLL $n of $($current.Count):  $($r.source_db)  ->  payroll $($r.legacy_payroll_number)" -ForegroundColor Cyan
+    Write-Host " PAYROLL $n of $($current.Count):  $($r.source_db)  ->  target payroll $($r.target_payroll_id)" -ForegroundColor Cyan
     Write-Host "===========================================================================" -ForegroundColor Cyan
     Write-Host ""
     Write-Host " Now, outside this script:" -ForegroundColor Yellow
@@ -170,10 +173,22 @@ foreach ($r in $current) {
         -PayrollSource $r.payroll_schema -PayrollTarget $r.payroll_schema
     if ($LASTEXITCODE -ne 0) { Write-Host "==> Refresh failed for $($r.source_db)." -ForegroundColor Red; exit 1 }
 
-    # VERIFY the declared payroll number against the data. The manifest is a
-    # declaration; this is the check that makes it one.
+    # The payroll number comes FROM THE DATA (every interim employees row carries
+    # it in payroll_f04; the sql/ scripts read it the same way). A number typed in
+    # the manifest is optional and, when present, only checked against the data.
     $found = Invoke-Psql "SELECT string_agg(DISTINCT payroll_f04::text, ',') FROM $($r.company_schema).employees"
     $found = ([string]$found).Trim()
+    if ($found -notmatch '^\d+$') {
+        Write-Host ""
+        Write-Host "==> NO SINGLE PAYROLL NUMBER in $($r.company_schema).employees.payroll_f04: '$found'." -ForegroundColor Red
+        Write-Host "    One imported database must hold exactly one payroll. Stopping." -ForegroundColor Yellow
+        exit 1
+    }
+    if (-not $r.legacy_payroll_number) {
+        $r.legacy_payroll_number = $found
+        Write-Host "    payroll number $found read from the data." -ForegroundColor Green
+        continue
+    }
     if ($found -ne $r.legacy_payroll_number) {
         Write-Host ""
         Write-Host "==> PAYROLL NUMBER MISMATCH for '$($r.source_db)'." -ForegroundColor Red
@@ -183,6 +198,16 @@ foreach ($r in $current) {
         exit 1
     }
     Write-Host "    payroll number $found confirmed against the data." -ForegroundColor Green
+}
+
+# Two payrolls of one tenant with the same number would share employee codes
+# ("<payroll>/<EmpNo>"), so the second would land on the first's employees.
+$dupe = $current | Group-Object legacy_payroll_number | Where-Object { $_.Count -gt 1 } | Select-Object -First 1
+if ($dupe) {
+    Write-Host ""
+    Write-Host "==> Payroll number $($dupe.Name) appears in more than one database: $(($dupe.Group | ForEach-Object source_db) -join ', ')." -ForegroundColor Red
+    Write-Host "    Each payroll of a tenant needs its own number. Stopping." -ForegroundColor Yellow
+    exit 1
 }
 
 # Every payroll is imported in full. Disagreements between their employee-data
@@ -268,6 +293,8 @@ if ($blocking.Count -gt 0) {
     Write-Host ""
     Write-Host " CONFLICT_NAME: add a row to $(Split-Path $OverridesPath -Leaf) naming the ordinal" -ForegroundColor Yellow
     Write-Host "   (see catalogue-overrides.example.csv), then re-run convert." -ForegroundColor Yellow
+    Write-Host " CONFLICT_DUPLICATE_NAME: two ordinals holding values ended up with one name" -ForegroundColor Yellow
+    Write-Host "   (notes say which); override all but one of them with a distinct name." -ForegroundColor Yellow
     Write-Host " CONFLICT_TYPE: the payrolls use the ordinal for different kinds of value;" -ForegroundColor Yellow
     Write-Host "   renumber it in one legacy payroll first. No override can fix that." -ForegroundColor Yellow
     Write-Host "---------------------------------------------------------------------------" -ForegroundColor Red
